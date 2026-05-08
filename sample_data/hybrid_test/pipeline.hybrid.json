@@ -1,0 +1,16 @@
+{
+  "hybrid": "docling-fast",
+  "hybrid_url": "http://127.0.0.1:5002",
+  "hybrid_mode": "auto",
+  "hybrid_fallback": true,
+  "hybrid_timeout": "120000",
+  "skip_health_check": false,
+  "table_method": "cluster",
+  "reading_order": "xycut",
+  "quiet": false,
+  "visual_tagging": "off",
+  "visual_min_score": 0.5,
+  "recursive": false,
+  "output_dir": null,
+  "json_output_dir": null
+}
