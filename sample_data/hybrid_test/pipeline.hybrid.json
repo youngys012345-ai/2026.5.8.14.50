@@ -1,8 +1,9 @@
 {
-  "hybrid": "docling-fast",
+  "mineru_backend": "pipeline",
+  "hybrid": "off",
   "hybrid_url": "http://127.0.0.1:5002",
   "hybrid_mode": "auto",
-  "hybrid_fallback": true,
+  "hybrid_fallback": false,
   "hybrid_timeout": "120000",
   "skip_health_check": false,
   "table_method": "cluster",

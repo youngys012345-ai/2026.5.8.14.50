@@ -4,9 +4,10 @@
 一键串联 PDF 抽取与评审信息提取流程。
 
 流程：
-1. 读取 PDF 目录，调用 extract_pdf.py 批量抽取为 JSON。
+1. 读取 PDF 目录，调用 extract_pdf.py 批量抽取为 JSON（默认 MinerU pipeline，不做 hybrid；视觉标签回填默认关闭）。
 2. 将所有抽取 JSON 合并为一个单独文件（便于集中归档/排查）。
-3. 调用 query_extracted_json.py，按评审模板回填“内容”字段，
+3. 调用 query_extracted_json.py，按评审模板回填“内容”字段；
+   模板中手写体相关视觉合并需显式 ``--merge-visual-tags``。
    输出到 output 目录下模板同名副本（如 output/评审标准.json）。
 """
 
@@ -97,6 +98,23 @@ def main() -> int:
         default="merged_extracted.json",
         help="合并后的原始抽取文件名（默认 merged_extracted.json）",
     )
+    parser.add_argument(
+        "--visual-tagging",
+        choices=("off", "clip", "vlm"),
+        default=None,
+        help="抽取阶段视觉标签（不传则使用 extract_pdf 默认：关闭）",
+    )
+    parser.add_argument(
+        "--visual-min-score",
+        type=float,
+        default=None,
+        help="视觉标签置信度阈值（可选，配合 --visual-tagging）",
+    )
+    parser.add_argument(
+        "--merge-visual-tags",
+        action="store_true",
+        help="评审回填时对「是否需要识别手写体」字段追加视觉标签/摘要",
+    )
     args = parser.parse_args()
 
     workspace = Path(__file__).resolve().parent
@@ -128,6 +146,10 @@ def main() -> int:
         extract_cmd.append("--recursive")
     if args.extract_config:
         extract_cmd.extend(["--config", str(Path(args.extract_config).resolve())])
+    if args.visual_tagging is not None:
+        extract_cmd.extend(["--visual-tagging", args.visual_tagging])
+    if args.visual_min_score is not None:
+        extract_cmd.extend(["--visual-min-score", str(args.visual_min_score)])
 
     print("步骤1/3：批量抽取 PDF ...")
     try:
@@ -156,6 +178,8 @@ def main() -> int:
     ]
     if args.recursive:
         query_cmd.append("--recursive")
+    if args.merge_visual_tags:
+        query_cmd.append("--merge-visual-tags")
 
     print("步骤3/3：按评审模板提取并回填内容字段 ...")
     try:

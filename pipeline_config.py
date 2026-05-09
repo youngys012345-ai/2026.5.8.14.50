@@ -37,6 +37,11 @@ CONFIG_KEYS = frozenset(
         "recursive",
         "output_dir",
         "json_output_dir",
+        "mineru_backend",
+        "mineru_api_url",
+        "mineru_model_source",
+        "mineru_tools_config_json",
+        "mineru_project_dir",
     }
 )
 
@@ -66,6 +71,23 @@ def _env_float(name: str, default: float) -> float:
 def defaults_from_environment() -> dict[str, Any]:
     """从环境变量读取管线默认值（预留与脚本、容器编排对接）。"""
     d: dict[str, Any] = {}
+    # MinerU 参数
+    mb = _env_str("MINERU_BACKEND", None) or _env_str("OPENDATALOADER_MINERU_BACKEND", None)
+    if mb is not None:
+        d["mineru_backend"] = mb
+    mu = _env_str("MINERU_API_URL", None) or _env_str("OPENDATALOADER_MINERU_API_URL", None)
+    if mu is not None:
+        d["mineru_api_url"] = mu
+    mms = _env_str("MINERU_MODEL_SOURCE", None) or _env_str("OPENDATALOADER_MINERU_MODEL_SOURCE", None)
+    if mms is not None:
+        d["mineru_model_source"] = mms
+    mtcj = _env_str("MINERU_TOOLS_CONFIG_JSON", None) or _env_str("OPENDATALOADER_MINERU_TOOLS_CONFIG_JSON", None)
+    if mtcj is not None:
+        d["mineru_tools_config_json"] = mtcj
+    mpd = _env_str("MINERU_PROJECT_DIR", None) or _env_str("OPENDATALOADER_MINERU_PROJECT_DIR", None)
+    if mpd is not None:
+        d["mineru_project_dir"] = mpd
+
     # Hybrid 客户端（Java 调远端 Docling 服务）
     hu = _env_str("OPENDATALOADER_HYBRID_URL", None)
     if hu is not None:

@@ -1,6 +1,7 @@
+import argparse
 from pathlib import Path
 
-from extract_pdf import _collect_pdf_files, _resolve_json_output_dir
+from extract_pdf import _auto_fill_local_mineru_settings, _collect_pdf_files, _resolve_json_output_dir
 
 
 def test_collect_pdf_files_for_directory(tmp_path: Path) -> None:
@@ -36,3 +37,21 @@ def test_resolve_json_output_dir_default_and_override(tmp_path: Path) -> None:
     assert default_out == (input_dir / "opendataloader_out" / "json").resolve()
     assert output_dir_out == (tmp_path / "out" / "json").resolve()
     assert custom_out == (tmp_path / "custom-json").resolve()
+
+
+def test_auto_fill_local_mineru_settings(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "config").mkdir(parents=True)
+    local_cfg = workspace / "config" / "mineru.local.json"
+    local_cfg.write_text('{"models-dir": {"pipeline": "x"}}', encoding="utf-8")
+    args = argparse.Namespace(
+        mineru_project_dir=None,
+        mineru_tools_config_json=None,
+        mineru_model_source=None,
+    )
+
+    _auto_fill_local_mineru_settings(args=args, workspace=workspace)
+
+    assert args.mineru_project_dir is None
+    assert args.mineru_tools_config_json == str(local_cfg.resolve())
+    assert args.mineru_model_source == "local"

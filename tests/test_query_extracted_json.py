@@ -61,13 +61,65 @@ def test_fill_template_content_and_visual_summary() -> None:
         }
     }
 
-    result = _fill_template_for_document(document=document, template=template)
+    result = _fill_template_for_document(
+        document=document,
+        template=template,
+        merge_visual_tags=True,
+    )
     fields = result["立案登记表"]["字段"]
     # 小标题后区块，不含小标题本身与整行重复拼接
     assert fields["案件来源"]["内容"] == "行政检查中发现"
     assert (
         fields["经办机构负责人意见"]["内容"]
         == "建议立案。；视觉标签：手写签名、印章"
+    )
+
+
+def test_fill_template_skips_visual_when_merge_disabled() -> None:
+    """未启用 merge_visual_tags 时，即使模板要求手写体识别也只回填正文。"""
+    document = {
+        "file name": "demo.pdf",
+        "title": "立案登记表",
+        "visual_tag_stats": {
+            "summary_sentence": "存在1个人的手写签名。",
+        },
+        "kids": [
+            {
+                "type": "heading",
+                "page number": 1,
+                "bounding box": [40, 700, 180, 730],
+                "content": "立案登记表",
+            },
+            {
+                "type": "paragraph",
+                "page number": 1,
+                "bounding box": [40, 590, 420, 620],
+                "content": "经办机构负责人意见：建议立案。",
+                "visual_tags": ["手写签名", "印章"],
+            },
+        ],
+    }
+
+    template = {
+        "立案登记表": {
+            "是否必须": "必须",
+            "字段": {
+                "经办机构负责人意见": {
+                    "是否需要识别手写体": "是",
+                    "要求": [],
+                    "内容": "",
+                },
+            },
+        }
+    }
+
+    result = _fill_template_for_document(
+        document=document,
+        template=template,
+        merge_visual_tags=False,
+    )
+    assert (
+        result["立案登记表"]["字段"]["经办机构负责人意见"]["内容"] == "建议立案。"
     )
 
 

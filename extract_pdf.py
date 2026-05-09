@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-使用 opendataloader-pdf 将 PDF 批量转为 JSON。
+使用 MinerU 将 PDF 批量转为 JSON，并适配为现有流程兼容结构。
 
-- 纯 Java 管线：适合结构简单的 PDF。
-- Hybrid（Docling）：复杂表格/版式建议先启动本地服务再转换（见 start_hybrid_server.ps1）。
-
-单次 convert() 批量处理多个 PDF，仅启动一次 JVM。
-可选视觉增强：识别签名/指印/印章并回填到最近段落或表格单元格（本地 CLIP 或 OpenAI 兼容 VLM API）。
-Hybrid 模式下 Java 会把页面交给 Docling 服务，需保证 http://127.0.0.1:5002 可用。
+说明：
+- 提取引擎已切换为 MinerU，不再依赖 opendataloader-pdf。
+- 产出 JSON 保持现有 query/visual_tagging 流程可消费的结构（kids/table/image 等）。
+可选视觉增强（默认关闭；``--visual-tagging clip|vlm``）：识别签名/指印/印章并回填到最近段落或表格单元格。
 """
 
 from __future__ import annotations
@@ -16,10 +14,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 
+from mineru_adapter import (
+    MinerUExtractionError,
+    convert_mineru_content_list_to_document,
+    run_mineru_cli_for_pdf,
+)
 from pipeline_config import (
     defaults_from_environment,
     load_config_file,
@@ -30,19 +31,13 @@ from visual_tagging import enrich_document_with_visual_tags
 from vlm_client import build_openai_compatible_vlm_detector
 
 
-DEFAULT_HYBRID_URL = "http://127.0.0.1:5002"
-
-
-def _hybrid_health_ok(url_base: str, timeout_sec: float = 2.0) -> bool:
-    base = url_base.rstrip("/")
-    for path in ("/health", "/"):
-        try:
-            req = urllib.request.Request(f"{base}{path}", method="GET")
-            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-                return resp.status == 200
-        except (urllib.error.URLError, OSError):
-            continue
-    return False
+def _auto_fill_local_mineru_settings(args: argparse.Namespace, workspace: Path) -> None:
+    """自动补全本地模型配置，默认仍优先使用已安装的 MinerU package。"""
+    local_cfg = workspace / "config" / "mineru.local.json"
+    if args.mineru_tools_config_json is None and local_cfg.is_file():
+        args.mineru_tools_config_json = str(local_cfg.resolve())
+    if args.mineru_model_source is None and args.mineru_tools_config_json:
+        args.mineru_model_source = "local"
 
 
 def _resolve_default_input() -> Path | None:
@@ -83,7 +78,7 @@ def _resolve_json_output_dir(input_path: Path, output_dir: str | None, json_outp
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="PDF 批量信息抽取（OpenDataLoader PDF，可选 Hybrid Docling）",
+        description="PDF 批量信息抽取（MinerU 提取 + 现有结构兼容）",
     )
     parser.add_argument(
         "--config",
@@ -101,7 +96,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "-o",
         "--output-dir",
         default=None,
-        help="输出根目录（默认：<输入目录>/opendataloader_out/）",
+        help="输出根目录（默认：<输入目录>/opendataloader_out/，为兼容旧流程保留目录名）",
     )
     parser.add_argument(
         "--json-output-dir",
@@ -114,48 +109,75 @@ def _build_parser() -> argparse.ArgumentParser:
         help="当输入为目录时，是否递归搜索子目录中的 PDF",
     )
     parser.add_argument(
+        "--mineru-backend",
+        default="pipeline",
+        help="MinerU backend（默认 pipeline，可改为 hybrid-http-client / vlm-http-client 等）",
+    )
+    parser.add_argument(
+        "--mineru-api-url",
+        default=None,
+        help="MinerU API 服务地址（可选，未提供时使用本地 CLI 默认行为）",
+    )
+    parser.add_argument(
+        "--mineru-model-source",
+        choices=("local", "huggingface", "modelscope"),
+        default=None,
+        help="MinerU 模型来源（local/huggingface/modelscope）。建议已下载本地模型时设为 local",
+    )
+    parser.add_argument(
+        "--mineru-tools-config-json",
+        default=None,
+        help="MinerU 配置文件名或绝对路径（默认读取 ~/mineru.json）",
+    )
+    parser.add_argument(
+        "--mineru-project-dir",
+        default=None,
+        help="本地 MinerU 源码项目目录（例如 ./MinerU）。提供后优先使用该项目执行提取",
+    )
+    # 以下参数仅为兼容旧脚本而保留，不参与 MinerU 抽取逻辑。
+    parser.add_argument(
         "--hybrid",
         choices=("off", "docling-fast", "hancom-ai"),
-        default="docling-fast",
-        help="Hybrid 后端：docling-fast（默认，需本地 Docling 服务）、hancom-ai、off=纯 Java",
+        default="off",
+        help="已弃用参数（保留兼容，不影响 MinerU 执行；默认 off）",
     )
     parser.add_argument(
         "--hybrid-url",
-        default=DEFAULT_HYBRID_URL,
-        help=f"Hybrid 服务地址（默认 {DEFAULT_HYBRID_URL}；可用环境变量 OPENDATALOADER_HYBRID_URL）",
+        default="http://127.0.0.1:5002",
+        help="已弃用参数（保留兼容，不影响 MinerU 执行）",
     )
     parser.add_argument(
         "--hybrid-mode",
         choices=("auto", "full"),
         default="auto",
-        help="auto=智能分流；full=全部页面走 hybrid（版式极难时可试 full）",
+        help="已弃用参数（保留兼容，不影响 MinerU 执行）",
     )
     parser.add_argument(
         "--hybrid-timeout",
         default="0",
-        help="Hybrid 请求超时（毫秒），0 表示不限制；对应 convert(hybrid_timeout=...)",
+        help="已弃用参数（保留兼容，不影响 MinerU 执行）",
     )
     parser.add_argument(
         "--hybrid-fallback",
         action="store_true",
-        help="hybrid 失败时回退到 Java 管线（默认关闭）",
+        help="已弃用参数（保留兼容，不影响 MinerU 执行）",
     )
     parser.add_argument(
         "--skip-health-check",
         action="store_true",
-        help="不检查 hybrid 服务是否已启动",
+        help="已弃用参数（保留兼容，不影响 MinerU 执行）",
     )
     parser.add_argument(
         "--table-method",
         choices=("default", "cluster"),
         default="cluster",
-        help="表格检测（仅纯 Java 管线；hybrid 下由 Docling 主导，此选项影响有限）",
+        help="已弃用参数（保留兼容，不影响 MinerU 执行）",
     )
     parser.add_argument(
         "--reading-order",
         choices=("xycut", "off"),
         default="xycut",
-        help="阅读顺序（仅纯 Java 管线）",
+        help="已弃用参数（保留兼容，不影响 MinerU 执行）",
     )
     parser.add_argument(
         "--quiet",
@@ -165,8 +187,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--visual-tagging",
         choices=("off", "clip", "vlm"),
-        default="clip",
-        help="视觉标签：off=关闭；clip=本地 CLIP；vlm=OpenAI 兼容视觉 API（需配置 vlm_api_base / vlm_model）",
+        default="off",
+        help="视觉标签回填：off=关闭（默认）；clip=本地 CLIP；vlm=OpenAI 兼容视觉 API（需配置 vlm_api_base / vlm_model）",
     )
     parser.add_argument(
         "--visual-min-score",
@@ -231,12 +253,8 @@ def main() -> int:
     }
     parser.set_defaults(**{k: v for k, v in merged.items() if k in dests})
     args = parser.parse_args(argv_rest)
-
-    try:
-        import opendataloader_pdf
-    except ImportError:
-        print("请先安装: pip install -r requirements.txt", file=sys.stderr)
-        return 1
+    workspace = Path(__file__).resolve().parent
+    _auto_fill_local_mineru_settings(args=args, workspace=workspace)
 
     if args.input:
         input_path = Path(args.input).resolve()
@@ -256,22 +274,6 @@ def main() -> int:
     if not pdf_files:
         print(f"未找到可处理的 PDF: {input_path}", file=sys.stderr)
         return 1
-
-    hybrid_backend = None if args.hybrid == "off" else args.hybrid
-
-    if hybrid_backend and not args.skip_health_check:
-        if not _hybrid_health_ok(args.hybrid_url):
-            print(
-                "未检测到 Hybrid 服务（请先在一个单独终端启动）：\n"
-                "  .\\start_hybrid_server.ps1\n"
-                "或:\n"
-                "  opendataloader-pdf-hybrid --port 5002 --host 127.0.0.1 --ocr-lang ch_sim,en\n"
-                f"期望地址: {args.hybrid_url}/health\n"
-                "若服务已在其他端口，请使用: --hybrid-url http://127.0.0.1:端口\n"
-                "跳过检查（不推荐）: --skip-health-check",
-                file=sys.stderr,
-            )
-            return 1
 
     detect_fn = None
     if args.visual_tagging == "vlm":
@@ -309,31 +311,35 @@ def main() -> int:
         json_output_dir=args.json_output_dir,
     )
     json_out_dir.mkdir(parents=True, exist_ok=True)
-
-    convert_kw = dict(
-        input_path=[str(pdf) for pdf in pdf_files],
-        output_dir=str(json_out_dir),
-        format="json",
-        keep_line_breaks=True,
-        markdown_page_separator="\n\n--- 第 %page-number% 页 ---\n\n",
-        quiet=args.quiet,
-    )
-
-    if hybrid_backend:
-        convert_kw.update(
-            hybrid=hybrid_backend,
-            hybrid_mode=args.hybrid_mode,
-            hybrid_url=args.hybrid_url,
-            hybrid_timeout=str(args.hybrid_timeout),
-            hybrid_fallback=args.hybrid_fallback,
-        )
-    else:
-        convert_kw.update(
-            reading_order=args.reading_order,
-            table_method=args.table_method,
-        )
-
-    opendataloader_pdf.convert(**convert_kw)
+    mineru_raw_dir = (json_out_dir / "_mineru_raw").resolve()
+    mineru_raw_dir.mkdir(parents=True, exist_ok=True)
+    for pdf in pdf_files:
+        try:
+            content_list_path = run_mineru_cli_for_pdf(
+                pdf_file=pdf,
+                output_root=mineru_raw_dir,
+                backend=args.mineru_backend,
+                api_url=args.mineru_api_url,
+                model_source=args.mineru_model_source,
+                mineru_tools_config_json=args.mineru_tools_config_json,
+                mineru_project_dir=args.mineru_project_dir,
+            )
+            document = convert_mineru_content_list_to_document(
+                content_list_path=content_list_path,
+                source_pdf=pdf,
+            )
+            json_path = json_out_dir / f"{pdf.stem}.json"
+            with json_path.open("w", encoding="utf-8") as f:
+                json.dump(document, f, ensure_ascii=False, indent=2)
+            if not args.quiet:
+                print(f"MinerU 抽取完成: {pdf.name} -> {json_path.name}")
+                if args.mineru_project_dir:
+                    print(f"  使用本地 MinerU 项目: {args.mineru_project_dir}")
+                if args.mineru_model_source:
+                    print(f"  模型来源: {args.mineru_model_source}")
+        except MinerUExtractionError as exc:
+            print(f"MinerU 抽取失败: {pdf}，原因: {exc}", file=sys.stderr)
+            return 1
 
     visual_total_hits = 0
     if args.visual_tagging != "off":

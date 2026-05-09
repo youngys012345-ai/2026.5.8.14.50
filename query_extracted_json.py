@@ -13,7 +13,7 @@
 3. 若一级标题（含并列）均未匹配，则该标题下所有字段“内容”统一填“内容缺失”。
 4. 一级标题命中后，优先基于字段小标题的 bounding box，在该位置右侧或下方的近邻文本块中取值（不向左、不向上取值）。
 5. 若右侧/下方近邻未命中，再回退到“小标题后区块正则截取 + 关键词检索”兼容逻辑。
-6. 若字段“是否需要识别手写体”为“是”，优先读取该字段目标位置周围最近的 visual_tags（可多个）；若未找到则回退 visual_tag_stats.summary_sentence。
+6. 若启用 ``--merge-visual-tags`` 且字段“是否需要识别手写体”为“是”，优先读取该字段目标位置周围最近的 visual_tags（可多个）；若未找到则回退 visual_tag_stats.summary_sentence。未启用时仅回填抽取文本，不追加视觉信息。
 """
 
 from __future__ import annotations
@@ -464,10 +464,12 @@ def _collect_nearest_visual_tags(
 def _fill_template_for_document(
     document: dict[str, Any],
     template: dict[str, Any],
+    *,
+    merge_visual_tags: bool = False,
 ) -> dict[str, Any]:
     """按模板回填单个文档的提取结果。"""
     result = copy.deepcopy(template)
-    visual_summary = _get_visual_summary(document)
+    visual_summary = _get_visual_summary(document) if merge_visual_tags else None
 
     for level1_title, level1_body in result.items():
         if not isinstance(level1_body, dict):
@@ -511,7 +513,10 @@ def _fill_template_for_document(
                 field_obj["内容"] = "内容缺失"
                 continue
 
-            need_visual = str(field_obj.get("是否需要识别手写体", "")).strip() == "是"
+            need_visual = (
+                merge_visual_tags
+                and str(field_obj.get("是否需要识别手写体", "")).strip() == "是"
+            )
             if need_visual:
                 nearest_tags = _collect_nearest_visual_tags(
                     document=document,
@@ -568,6 +573,11 @@ def main() -> int:
         action="store_true",
         help="递归检索 JSON 子目录",
     )
+    parser.add_argument(
+        "--merge-visual-tags",
+        action="store_true",
+        help="模板中「是否需要识别手写体」为是时，追加视觉标签/摘要（需抽取阶段已生成 visual_tags 或摘要）",
+    )
     args = parser.parse_args()
 
     json_dir = Path(args.json_dir).resolve()
@@ -602,7 +612,11 @@ def main() -> int:
             {
                 "json_file": str(json_path),
                 "source_pdf": str(document.get("file name", "")),
-                "result": _fill_template_for_document(document=document, template=template),
+                "result": _fill_template_for_document(
+                    document=document,
+                    template=template,
+                    merge_visual_tags=args.merge_visual_tags,
+                ),
             }
         )
 

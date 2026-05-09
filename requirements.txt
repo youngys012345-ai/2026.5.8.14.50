@@ -1,5 +1,5 @@
-# 完整解析管道含 Docling hybrid 后端（首次安装体积较大，需可访问 PyPI）
-opendataloader-pdf[hybrid]>=2.0.0
+# MinerU 提取引擎（支持 PDF/图片/Office 文档，输出 markdown/json）
+mineru[all]>=3.1.0
 
 # 视觉标签增强（识别手写签名/指印/印章）所需依赖
 pillow>=10.0.0
