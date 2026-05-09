@@ -1,8 +1,9 @@
 {
   "__说明": [
-    "mineru_project_root：MinerU 仓库根（含 mineru/）。未指定 mineru_tools_config_json 时，优先使用 MinerU 目录内 models/（与 mineru-models-download 一致），其次项目根 local_models/mineru/pipeline。",
+    "MinerU 不包含在本仓库：请单独 clone 官方 MinerU 到 ./MinerU（或与项目同级 ../MinerU，未配置 mineru_project_root 时会自动探测）。安装依赖按 MinerU 文档；pipeline 模型可用 mineru-models-download 或放入 MinerU/models、local_models。",
+    "mineru_project_root：指向上述 MinerU 仓库根（含 mineru/）。未指定 mineru_tools_config_json 时，优先 MinerU/models，其次 local_models/mineru/pipeline。",
     "对比 OpenDataLoader 时可另设 output_dir 或 --backend opendataloader。",
-    "visual_tagging：off（默认）；clip（本地 CLIP 识别手写签名/指印/印章）；vlm（需配置 vlm_api_base、vlm_model）。标签写入 JSON 节点并追加到 Markdown 文末「视觉标签摘要」，不改段落与表格内 OCR 正文。"
+    "visual_tagging：off（默认）；clip；vlm（需 vlm_api_base、vlm_model）。标签写入 JSON 并追加 Markdown 文末摘要。"
   ],
 
   "input": "sample_pdfs/标讯-启东市吕四港镇大洋港小学综合楼工程的招标公告.pdf",

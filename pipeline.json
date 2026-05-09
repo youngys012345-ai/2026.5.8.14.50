@@ -1,5 +1,5 @@
 {
-  "__说明": "mineru_project_root 指向 MinerU 仓库根（含 mineru/）；本地 pipeline 模型优先使用 MinerU/models（PDF-Extract-Kit 布局），其次 local_models/mineru/pipeline；可改用 mineru_tools_config_json",
+  "__说明": "MinerU 需单独克隆：在项目根执行 git clone <MinerU官方仓库> MinerU（或与项目同级克隆后自动识别 ../MinerU）。mineru_project_root 指向该仓库根（含 mineru/）；模型见 MinerU/models、local_models 或 Hub；可改用 mineru_tools_config_json",
 
   "input": "sample_pdfs/标讯-启东市吕四港镇大洋港小学综合楼工程的招标公告.pdf",
   "output_dir": "output",
