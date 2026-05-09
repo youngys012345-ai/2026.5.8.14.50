@@ -193,3 +193,24 @@ def test_fallback_nearest_when_no_overlap(tmp_path: Path) -> None:
 
     assert document["kids"][0]["rows"][0]["cells"][0]["visual_tags"] == ["指印"]
     assert document["kids"][1]["visual_anchor_mode"] == "nearest"
+
+
+def test_document_markdown_preserves_body_and_appends_visual_section() -> None:
+    """导出 Markdown 时正文不变，仅在文末追加视觉摘要块。"""
+    from document_export import document_to_markdown
+
+    doc = {
+        "file name": "a.pdf",
+        "number of pages": 1,
+        "kids": [{"type": "paragraph", "page number": 1, "content": "合同正文一行"}],
+        "visual_tag_stats": {
+            "total": 2,
+            "counts": {"印章": 2},
+            "summary_sentence": "存在2个印章。",
+        },
+    }
+    md = document_to_markdown(doc)
+    assert md.index("合同正文一行") < md.index("### 视觉标签摘要")
+    assert "### 视觉标签摘要" in md
+    assert "存在2个印章。" in md
+    assert "<!-- visual_tag_total: 2 -->" in md

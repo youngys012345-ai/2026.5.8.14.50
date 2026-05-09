@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MinerU 提取适配层。
+MinerU 提取适配层（仅支持本地 MinerU 源码仓库）。
 
 职责：
-1. 调用 MinerU CLI 对单个 PDF 做解析；
+1. 在指定 MinerU 项目根目录下执行 ``python -m mineru.cli.client``；
 2. 定位 MinerU 生成的 content_list / content_list_v2；
 3. 转换为当前项目既有的文档结构（含 kids、table rows/cells、image 节点等）。
 """
@@ -19,6 +19,9 @@ import sys
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
+
+MINERU_CLI_SHIM = "-m"
+MINERU_CLI_MODULE = "mineru.cli.client"
 
 
 class MinerUExtractionError(RuntimeError):
@@ -266,7 +269,7 @@ def _convert_content_list_v2(payload: list[Any], content_list_path: Path) -> lis
             text = _flatten_v2_content(content)
             if not text:
                 continue
-            node: dict[str, Any] = {
+            node = {
                 "type": "paragraph",
                 "id": node_id,
                 "page number": page_number,
@@ -328,22 +331,39 @@ def locate_mineru_content_list(output_root: Path, pdf_file: Path) -> Path:
     return candidates[0]
 
 
+def _validate_mineru_source_root(root: Path) -> None:
+    """确认目录为 MinerU 克隆仓库根（含 mineru 包目录）。"""
+    pkg = root / "mineru"
+    if not pkg.is_dir():
+        raise MinerUExtractionError(
+            f"MinerU 源码路径无效（缺少子目录 mineru/）: {root}\n"
+            "请配置 mineru_project_root 为本地 MinerU 仓库根路径。"
+        )
+
+
 def run_mineru_cli_for_pdf(
     pdf_file: Path,
     output_root: Path,
+    mineru_project_root: str | Path,
     backend: str | None = None,
     api_url: str | None = None,
     model_source: str | None = None,
     mineru_tools_config_json: str | None = None,
-    mineru_project_dir: str | None = None,
+    cli_timeout_sec: float | None = None,
 ) -> Path:
-    """执行 MinerU CLI 并返回 content_list 文件路径。"""
-    project_dir_path: Path | None = None
-    if mineru_project_dir:
-        project_dir_path = Path(mineru_project_dir).resolve()
-        cmd = [sys.executable, "-m", "mineru.cli.client", "-p", str(pdf_file), "-o", str(output_root)]
-    else:
-        cmd = ["mineru", "-p", str(pdf_file), "-o", str(output_root)]
+    """在本地 MinerU 源码树中执行 CLI，并返回 content_list 文件路径。"""
+    root = Path(mineru_project_root).resolve()
+    _validate_mineru_source_root(root)
+
+    cmd: list[str] = [
+        sys.executable,
+        MINERU_CLI_SHIM,
+        MINERU_CLI_MODULE,
+        "-p",
+        str(pdf_file),
+        "-o",
+        str(output_root),
+    ]
     if backend:
         cmd.extend(["-b", backend])
     if api_url:
@@ -352,30 +372,35 @@ def run_mineru_cli_for_pdf(
         else:
             cmd.extend(["--api-url", api_url])
 
-    env = None
-    if model_source or mineru_tools_config_json or project_dir_path is not None:
-        env = dict(os.environ)
-        if model_source:
-            env["MINERU_MODEL_SOURCE"] = model_source
-        if mineru_tools_config_json:
-            env["MINERU_TOOLS_CONFIG_JSON"] = mineru_tools_config_json
-        if project_dir_path is not None:
-            current_pythonpath = env.get("PYTHONPATH", "")
-            if current_pythonpath:
-                env["PYTHONPATH"] = f"{project_dir_path}{os.pathsep}{current_pythonpath}"
-            else:
-                env["PYTHONPATH"] = str(project_dir_path)
+    env = dict(os.environ)
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    if model_source:
+        env["MINERU_MODEL_SOURCE"] = model_source
+    if mineru_tools_config_json:
+        env["MINERU_TOOLS_CONFIG_JSON"] = mineru_tools_config_json
+    current_pythonpath = env.get("PYTHONPATH", "")
+    if current_pythonpath:
+        env["PYTHONPATH"] = f"{root}{os.pathsep}{current_pythonpath}"
+    else:
+        env["PYTHONPATH"] = str(root)
 
     try:
         subprocess.run(
             cmd,
             check=True,
             env=env,
-            cwd=str(project_dir_path) if project_dir_path is not None else None,
+            cwd=str(root),
+            stdin=subprocess.DEVNULL,
+            timeout=cli_timeout_sec,
         )
     except OSError as exc:
         raise MinerUExtractionError(
-            "执行 MinerU 失败。请先安装并确保命令可用：pip install \"mineru[all]\""
+            f"无法启动 MinerU CLI（请在该环境中已安装 MinerU 依赖）: {exc}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise MinerUExtractionError(
+            f"MinerU 子进程超时（{cli_timeout_sec} 秒）。若为首次运行可能在下载模型；"
+            "请配置本地模型（mineru_tools_config_json / local_models）或指定常驻 --mineru-api-url。"
         ) from exc
     except subprocess.CalledProcessError as exc:
         raise MinerUExtractionError(f"MinerU 解析失败，退出码: {exc.returncode}") from exc

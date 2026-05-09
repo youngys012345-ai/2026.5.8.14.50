@@ -1,22 +1,48 @@
 {
-  "_comment": "复制为 pipeline.json 后按需修改；CLI 与环境变量优先覆盖此处。MinerU 使用本地 pipeline 后端（mineru_backend=pipeline）。以下为旧版 hybrid 客户端占位键，MinerU 抽取已不再使用，可填 off 省略 Docling 服务。可选视觉标签回填：visual_tagging=clip 或 vlm（需配置 vlm_*）；环境变量见 pipeline_config.py",
+  "__说明": [
+    "mineru_project_root：MinerU 仓库根（含 mineru/）。未指定 mineru_tools_config_json 时，优先使用 MinerU 目录内 models/（与 mineru-models-download 一致），其次项目根 local_models/mineru/pipeline。",
+    "对比 OpenDataLoader 时可另设 output_dir 或 --backend opendataloader。",
+    "visual_tagging：off（默认）；clip（本地 CLIP 识别手写签名/指印/印章）；vlm（需配置 vlm_api_base、vlm_model）。标签写入 JSON 节点并追加到 Markdown 文末「视觉标签摘要」，不改段落与表格内 OCR 正文。"
+  ],
+
+  "input": "sample_pdfs/标讯-启东市吕四港镇大洋港小学综合楼工程的招标公告.pdf",
+  "output_dir": "output",
+
+  "backend": "mineru",
+  "mineru_project_root": "MinerU",
   "mineru_backend": "pipeline",
   "mineru_api_url": null,
   "mineru_model_source": null,
   "mineru_tools_config_json": null,
-  "mineru_project_dir": null,
+  "mineru_cli_timeout_sec": null,
+
   "hybrid": "off",
   "hybrid_url": "http://127.0.0.1:5002",
   "hybrid_mode": "auto",
-  "hybrid_fallback": false,
   "hybrid_timeout": "0",
-  "skip_health_check": false,
+  "hybrid_fallback": false,
+
   "table_method": "cluster",
   "reading_order": "xycut",
+
+  "recursive": false,
   "quiet": false,
+
   "visual_tagging": "off",
   "visual_min_score": 0.5,
-  "recursive": false,
-  "output_dir": null,
-  "json_output_dir": null
+
+  "vlm_api_base": null,
+  "vlm_api_key": null,
+  "vlm_model": null,
+  "vlm_timeout_sec": null,
+  "vlm_chat_path": null,
+  "vlm_system_prompt": null,
+  "vlm_user_prompt": null,
+
+  "vlm_fallback": "off",
+  "vlm_fallback_threshold": 80,
+  "vlm_fallback_dpi": 120,
+
+  "vlm_page_system_prompt": null,
+  "vlm_page_user_prompt_template": null
 }

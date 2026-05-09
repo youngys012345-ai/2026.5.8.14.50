@@ -1,8 +1,24 @@
 import json
 from pathlib import Path
+import subprocess
 import sys
+from typing import Any
 
-from mineru_adapter import convert_mineru_content_list_to_document, run_mineru_cli_for_pdf
+import pytest
+
+from mineru_adapter import (
+    MINERU_CLI_MODULE,
+    MINERU_CLI_SHIM,
+    MinerUExtractionError,
+    convert_mineru_content_list_to_document,
+    run_mineru_cli_for_pdf,
+)
+
+
+def _fake_mineru_repo(tmp_path: Path) -> Path:
+    root = tmp_path / "MinerU_src"
+    (root / "mineru").mkdir(parents=True)
+    return root
 
 
 def test_convert_content_list_v1_to_document(tmp_path: Path) -> None:
@@ -117,12 +133,24 @@ def test_convert_content_list_v2_to_document(tmp_path: Path) -> None:
     assert table_nodes[0]["rows"][0]["cells"][0]["kids"][0]["content"] == "项目名称"
 
 
+def test_run_mineru_cli_rejects_invalid_repo(tmp_path: Path) -> None:
+    bad = tmp_path / "not_mineru"
+    bad.mkdir()
+    with pytest.raises(MinerUExtractionError):
+        run_mineru_cli_for_pdf(
+            pdf_file=tmp_path / "demo.pdf",
+            output_root=tmp_path,
+            mineru_project_root=bad,
+        )
+
+
 def test_run_mineru_cli_uses_api_url_for_pipeline_backend(tmp_path: Path, monkeypatch) -> None:
     calls: list[list[str]] = []
     fake_output = tmp_path / "demo_content_list.json"
     fake_output.write_text("[]", encoding="utf-8")
+    repo = _fake_mineru_repo(tmp_path)
 
-    def _fake_run(cmd: list[str], check: bool, env=None, cwd=None) -> None:
+    def _fake_run(cmd: list[str], *args: Any, **kwargs: Any) -> None:
         calls.append(cmd)
 
     monkeypatch.setattr("mineru_adapter.subprocess.run", _fake_run)
@@ -131,11 +159,15 @@ def test_run_mineru_cli_uses_api_url_for_pipeline_backend(tmp_path: Path, monkey
     out = run_mineru_cli_for_pdf(
         pdf_file=tmp_path / "demo.pdf",
         output_root=tmp_path,
+        mineru_project_root=repo,
         backend="pipeline",
         api_url="http://127.0.0.1:8000",
     )
 
     assert out == fake_output
+    assert calls[0][0] == sys.executable
+    assert calls[0][1] == MINERU_CLI_SHIM
+    assert calls[0][2] == MINERU_CLI_MODULE
     assert "--api-url" in calls[0]
     assert "-u" not in calls[0]
 
@@ -144,8 +176,9 @@ def test_run_mineru_cli_uses_u_for_http_client_backend(tmp_path: Path, monkeypat
     calls: list[list[str]] = []
     fake_output = tmp_path / "demo_content_list.json"
     fake_output.write_text("[]", encoding="utf-8")
+    repo = _fake_mineru_repo(tmp_path)
 
-    def _fake_run(cmd: list[str], check: bool, env=None, cwd=None) -> None:
+    def _fake_run(cmd: list[str], *args: Any, **kwargs: Any) -> None:
         calls.append(cmd)
 
     monkeypatch.setattr("mineru_adapter.subprocess.run", _fake_run)
@@ -154,6 +187,7 @@ def test_run_mineru_cli_uses_u_for_http_client_backend(tmp_path: Path, monkeypat
     out = run_mineru_cli_for_pdf(
         pdf_file=tmp_path / "demo.pdf",
         output_root=tmp_path,
+        mineru_project_root=repo,
         backend="hybrid-http-client",
         api_url="http://127.0.0.1:30000",
     )
@@ -166,8 +200,11 @@ def test_run_mineru_cli_sets_model_env(tmp_path: Path, monkeypatch) -> None:
     captured_env = {}
     fake_output = tmp_path / "demo_content_list.json"
     fake_output.write_text("[]", encoding="utf-8")
+    repo = _fake_mineru_repo(tmp_path)
+    cfg = tmp_path / "mineru.local.json"
+    cfg.write_text("{}", encoding="utf-8")
 
-    def _fake_run(cmd: list[str], check: bool, env=None, cwd=None) -> None:
+    def _fake_run(cmd: list[str], *args: Any, env=None, **kwargs: Any) -> None:
         if env:
             captured_env.update(env)
 
@@ -177,36 +214,45 @@ def test_run_mineru_cli_sets_model_env(tmp_path: Path, monkeypatch) -> None:
     run_mineru_cli_for_pdf(
         pdf_file=tmp_path / "demo.pdf",
         output_root=tmp_path,
+        mineru_project_root=repo,
         backend="pipeline",
         model_source="local",
-        mineru_tools_config_json=str(tmp_path / "mineru.local.json"),
+        mineru_tools_config_json=str(cfg),
     )
 
     assert captured_env["MINERU_MODEL_SOURCE"] == "local"
     assert captured_env["MINERU_TOOLS_CONFIG_JSON"].endswith("mineru.local.json")
+    assert captured_env.get("PYTHONUNBUFFERED") == "1"
+    assert str(repo.resolve()) in captured_env["PYTHONPATH"]
 
 
-def test_run_mineru_cli_uses_local_project(tmp_path: Path, monkeypatch) -> None:
-    captured = {"cmd": None, "cwd": None, "env": None}
+def test_run_mineru_cli_sets_cwd_to_repo_root(tmp_path: Path, monkeypatch) -> None:
+    """工作目录与 PYTHONPATH 指向 MinerU 源码根，便于加载仓库内代码。"""
+    captured: dict[str, Any] = {}
     fake_output = tmp_path / "demo_content_list.json"
     fake_output.write_text("[]", encoding="utf-8")
+    repo = _fake_mineru_repo(tmp_path)
 
-    def _fake_run(cmd: list[str], check: bool, env=None, cwd=None) -> None:
+    def _fake_run(cmd: list[str], *args: Any, env=None, cwd=None, stdin=None, **kwargs: Any) -> None:
         captured["cmd"] = cmd
         captured["cwd"] = cwd
         captured["env"] = env
+        captured["stdin"] = stdin
 
     monkeypatch.setattr("mineru_adapter.subprocess.run", _fake_run)
     monkeypatch.setattr("mineru_adapter.locate_mineru_content_list", lambda output_root, pdf_file: fake_output)
 
-    project_dir = tmp_path / "MinerU"
-    project_dir.mkdir()
     run_mineru_cli_for_pdf(
         pdf_file=tmp_path / "demo.pdf",
         output_root=tmp_path,
-        mineru_project_dir=str(project_dir),
+        mineru_project_root=repo,
     )
 
-    assert captured["cmd"][:3] == [sys.executable, "-m", "mineru.cli.client"]
-    assert captured["cwd"] == str(project_dir.resolve())
-    assert str(project_dir.resolve()) in str(captured["env"].get("PYTHONPATH", ""))
+    assert captured["cmd"][0] == sys.executable
+    assert captured["cmd"][1] == MINERU_CLI_SHIM
+    assert captured["cmd"][2] == MINERU_CLI_MODULE
+    assert captured.get("cwd") == str(repo.resolve())
+    assert captured.get("env") is not None
+    assert captured["env"].get("PYTHONUNBUFFERED") == "1"
+    assert str(repo.resolve()) in captured["env"]["PYTHONPATH"]
+    assert captured.get("stdin") is subprocess.DEVNULL

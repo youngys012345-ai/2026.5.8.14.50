@@ -7,7 +7,7 @@
 1. 与图片包围盒相交的表格行：向该行每一个单元格写入标签（整行与关键词行匹配时均可汇总到 visual_tags）；
 2. 与图片包围盒相交的段落；
 3. 同页上包围盒中心距离最近的段落或单元格（回退）。
-同时在 image 节点上写入 visual_classification，便于与 OpenDataLoader 的 image 节点对齐追溯。
+同时在 image 节点上写入 visual_classification，便于与其它导出字段对齐追溯。
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def _distance(a: list[float], b: list[float]) -> float:
 
 
 def _bbox_intersects(a: list[float], b: list[float]) -> bool:
-    """判断两个轴对齐矩形是否相交（坐标系与 OpenDataLoader 导出一致）。"""
+    """判断两个轴对齐矩形是否相交（PDF 页坐标系，左下或左上依渲染约定）。"""
     ax0, ay0, ax1, ay1 = a
     bx0, by0, bx1, by1 = b
     return not (ax1 < bx0 or bx1 < ax0 or ay1 < by0 or by1 < ay0)

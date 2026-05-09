@@ -1,0 +1,44 @@
+{
+  "__说明": "mineru_project_root 指向 MinerU 仓库根（含 mineru/）；本地 pipeline 模型优先使用 MinerU/models（PDF-Extract-Kit 布局），其次 local_models/mineru/pipeline；可改用 mineru_tools_config_json",
+
+  "input": "sample_pdfs/标讯-启东市吕四港镇大洋港小学综合楼工程的招标公告.pdf",
+  "output_dir": "output",
+
+  "backend": "mineru",
+  "mineru_project_root": "MinerU",
+  "mineru_backend": "pipeline",
+  "mineru_api_url": null,
+  "mineru_model_source": null,
+  "mineru_tools_config_json": null,
+  "mineru_cli_timeout_sec": null,
+
+  "hybrid": "off",
+  "hybrid_url": "http://127.0.0.1:5002",
+  "hybrid_mode": "auto",
+  "hybrid_timeout": "0",
+  "hybrid_fallback": false,
+
+  "table_method": "cluster",
+  "reading_order": "xycut",
+
+  "recursive": false,
+  "quiet": false,
+
+  "visual_tagging": "off",
+  "visual_min_score": 0.5,
+
+  "vlm_api_base": null,
+  "vlm_api_key": null,
+  "vlm_model": null,
+  "vlm_timeout_sec": null,
+  "vlm_chat_path": null,
+  "vlm_system_prompt": null,
+  "vlm_user_prompt": null,
+
+  "vlm_fallback": "off",
+  "vlm_fallback_threshold": 80,
+  "vlm_fallback_dpi": 120,
+
+  "vlm_page_system_prompt": null,
+  "vlm_page_user_prompt_template": null
+}

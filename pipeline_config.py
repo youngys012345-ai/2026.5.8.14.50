@@ -16,6 +16,7 @@ from typing import Any
 # 与 extract_pdf 中参数对应的可配置键（便于日后扩展，勿随意删改键名）
 CONFIG_KEYS = frozenset(
     {
+        "backend",
         "hybrid",
         "hybrid_url",
         "hybrid_mode",
@@ -37,11 +38,19 @@ CONFIG_KEYS = frozenset(
         "recursive",
         "output_dir",
         "json_output_dir",
+        "markdown_output_dir",
+        "vlm_fallback",
+        "vlm_fallback_threshold",
+        "vlm_fallback_dpi",
+        "vlm_page_system_prompt",
+        "vlm_page_user_prompt_template",
         "mineru_backend",
         "mineru_api_url",
         "mineru_model_source",
         "mineru_tools_config_json",
-        "mineru_project_dir",
+        "mineru_cli_timeout_sec",
+        "mineru_project_root",
+        "input",
     }
 )
 
@@ -84,11 +93,19 @@ def defaults_from_environment() -> dict[str, Any]:
     mtcj = _env_str("MINERU_TOOLS_CONFIG_JSON", None) or _env_str("OPENDATALOADER_MINERU_TOOLS_CONFIG_JSON", None)
     if mtcj is not None:
         d["mineru_tools_config_json"] = mtcj
-    mpd = _env_str("MINERU_PROJECT_DIR", None) or _env_str("OPENDATALOADER_MINERU_PROJECT_DIR", None)
-    if mpd is not None:
-        d["mineru_project_dir"] = mpd
+    mcts = _env_str("MINERU_CLI_TIMEOUT_SEC", None) or _env_str(
+        "OPENDATALOADER_MINERU_CLI_TIMEOUT_SEC", None
+    )
+    if mcts is not None and mcts != "":
+        try:
+            d["mineru_cli_timeout_sec"] = float(mcts)
+        except ValueError:
+            pass
 
-    # Hybrid 客户端（Java 调远端 Docling 服务）
+    mpr = _env_str("MINERU_PROJECT_ROOT", None) or _env_str("OPENDATALOADER_MINERU_PROJECT_ROOT", None)
+    if mpr is not None:
+        d["mineru_project_root"] = mpr
+
     hu = _env_str("OPENDATALOADER_HYBRID_URL", None)
     if hu is not None:
         d["hybrid_url"] = hu
@@ -105,6 +122,7 @@ def defaults_from_environment() -> dict[str, Any]:
         d["hybrid_timeout"] = ht
     if os.environ.get("OPENDATALOADER_SKIP_HEALTH_CHECK"):
         d["skip_health_check"] = _env_bool("OPENDATALOADER_SKIP_HEALTH_CHECK", False)
+
     # 视觉增强（CLIP / VLM）
     vt = _env_str("OPENDATALOADER_VISUAL_TAGGING", None)
     if vt is not None:
@@ -136,9 +154,27 @@ def defaults_from_environment() -> dict[str, Any]:
     od = _env_str("OPENDATALOADER_OUTPUT_DIR", None)
     if od is not None:
         d["output_dir"] = od
+    pdf_in = _env_str("OPENDATALOADER_INPUT", None) or _env_str("OPENDATALOADER_PDF", None)
+    if pdf_in is not None:
+        d["input"] = pdf_in
+    ob = _env_str("OPENDATALOADER_BACKEND", None)
+    if ob is not None:
+        d["backend"] = ob
     jd = _env_str("OPENDATALOADER_JSON_OUTPUT_DIR", None)
     if jd is not None:
         d["json_output_dir"] = jd
+    md_out = _env_str("OPENDATALOADER_MARKDOWN_OUTPUT_DIR", None)
+    if md_out is not None:
+        d["markdown_output_dir"] = md_out
+    vf = _env_str("OPENDATALOADER_VLM_FALLBACK", None)
+    if vf is not None:
+        d["vlm_fallback"] = vf
+    vft = _env_str("OPENDATALOADER_VLM_FALLBACK_THRESHOLD", None)
+    if vft is not None and vft != "":
+        try:
+            d["vlm_fallback_threshold"] = int(vft)
+        except ValueError:
+            pass
     if os.environ.get("OPENDATALOADER_RECURSIVE"):
         d["recursive"] = _env_bool("OPENDATALOADER_RECURSIVE", False)
     if os.environ.get("OPENDATALOADER_QUIET"):
@@ -172,6 +208,24 @@ def merge_defaults(
         for k, v in layer.items():
             merged[k] = v
     return merged
+
+
+def resolve_pipeline_config_path(requested: Path) -> tuple[Path | None, str | None]:
+    """
+    解析实际存在的管线配置文件路径。
+    若用户拼错常见文件名（如 pipline.json），且同目录下存在修正后的文件，则改用后者。
+    返回 (存在的路径, 给 stderr 的简短中文提示)；找不到则 (None, None)。
+    """
+    if requested.is_file():
+        return requested.resolve(), None
+    parent = requested.parent
+    name = requested.name
+    # 常见拼写：pipline -> pipeline
+    if name.lower() == "pipline.json":
+        alt = parent / "pipeline.json"
+        if alt.is_file():
+            return alt.resolve(), f"提示: 未找到 {name}，已改用 {alt.name}"
+    return None, None
 
 
 def pop_config_path_from_argv(argv: list[str]) -> tuple[Path | None, list[str]]:
