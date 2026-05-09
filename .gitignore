@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# MinerU 下载的 pipeline 权重（体积可达数 GB，勿提交）
+local_models/
+
+# 抽取输出与对比目录（应本地生成）
+output/
+output_*/
+
+# 可选：若 MinerU 仓库克隆在本目录且内含 models/
+MinerU/models/
