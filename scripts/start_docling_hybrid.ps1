@@ -9,9 +9,9 @@
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$HybridExe = Join-Path $ProjectRoot ".venv\Scripts\opendataloader-pdf-hybrid.exe"
+$HybridExe = Join-Path $ProjectRoot "venv312\Scripts\opendataloader-pdf-hybrid.exe"
 if (-not (Test-Path $HybridExe)) {
-    Write-Error "未找到 $HybridExe。请先执行: py -3.12 -m venv .venv ; .\.venv\Scripts\pip install -r requirements.txt"
+    Write-Error "未找到 $HybridExe。请先执行: py -3.12 -m venv venv312 ; .\venv312\Scripts\pip install -r requirements.txt"
     exit 1
 }
 

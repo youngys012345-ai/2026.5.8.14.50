@@ -1,10 +1,10 @@
 # PDF 抽取管线（Python 3.12；OpenDataLoader 需系统安装 Java 11+）
-# 创建环境：py -3.12 -m venv .venv  →  .venv\Scripts\activate  →  pip install -r requirements.txt
+# 创建环境：py -3.12 -m venv venv312  →  .\venv312\Scripts\activate  →  pip install -r requirements.txt
 #
 # Hybrid（Docling）服务（pipeline.json 中 hybrid 非 off 时需要）：
 #   务必使用本 venv 启动；图片/扫描 PDF 需「全页强制 OCR」时脚本会读 pipeline.json 的 hybrid_force_ocr / hybrid_ocr_lang 并加 --force-ocr：
 #   .\scripts\start_docling_hybrid.ps1
-#   （等价手动：.venv\Scripts\opendataloader-pdf-hybrid.exe --port 5002 --force-ocr --ocr-lang ch_sim,en）
+#   （等价手动：.\venv312\Scripts\opendataloader-pdf-hybrid.exe --port 5002 --force-ocr --ocr-lang ch_sim,en）
 
 opendataloader-pdf[hybrid]>=2.4,<3
 pymupdf>=1.24.0

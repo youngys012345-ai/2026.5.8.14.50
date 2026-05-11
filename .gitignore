@@ -1,4 +1,5 @@
-# Python
+# Python（项目约定虚拟环境目录名为 venv312；下列为常见本地目录，勿提交）
+venv312/
 .venv/
 venv/
 __pycache__/
