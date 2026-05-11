@@ -4,7 +4,6 @@ from pathlib import Path
 
 from extract_pdf import (
     _auto_fill_local_mineru_settings,
-    _auto_fill_mineru_project_root,
     _collect_pdf_files,
     _mineru_pipeline_models_parent,
     _resolve_output_layout,
@@ -38,7 +37,7 @@ def test_resolve_output_layout_defaults_and_override(tmp_path: Path) -> None:
     jd, md, root = _resolve_output_layout(
         workspace=workspace,
         input_path=file_path,
-        output_dir=None,
+        output_dir=str(workspace / "output"),
         json_output_dir=None,
         markdown_output_dir=None,
     )
@@ -73,6 +72,7 @@ def test_auto_fill_local_mineru_settings(tmp_path: Path) -> None:
     local_cfg = workspace / "config" / "mineru.local.json"
     local_cfg.write_text('{"models-dir": {"pipeline": "x"}}', encoding="utf-8")
     args = argparse.Namespace(
+        backend="mineru",
         mineru_tools_config_json=None,
         mineru_model_source=None,
     )
@@ -148,16 +148,6 @@ def test_auto_fill_generates_tools_when_pipeline_models_present(tmp_path: Path) 
         p = getattr(args, "_mineru_autogen_tools_json", None)
         if p:
             Path(p).unlink(missing_ok=True)
-
-
-def test_auto_fill_mineru_project_root_from_parent_dir(tmp_path: Path) -> None:
-    workspace = tmp_path / "opendataloader_quickstart"
-    workspace.mkdir(parents=True)
-    mineru_repo = tmp_path / "MinerU"
-    (mineru_repo / "mineru").mkdir(parents=True)
-    args = argparse.Namespace(mineru_project_root=None)
-    _auto_fill_mineru_project_root(args=args, workspace=workspace)
-    assert args.mineru_project_root == str(mineru_repo.resolve())
 
 
 def test_auto_fill_skips_autogen_when_user_wants_hub(tmp_path: Path) -> None:

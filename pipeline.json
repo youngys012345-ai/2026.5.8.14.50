@@ -1,10 +1,28 @@
 {
-  "__说明": "MinerU 需单独克隆：在项目根执行 git clone <MinerU官方仓库> MinerU（或与项目同级克隆后自动识别 ../MinerU）。mineru_project_root 指向该仓库根（含 mineru/）；模型见 MinerU/models、local_models 或 Hub；可改用 mineru_tools_config_json",
+  "__readme": "业务参数仅在本文件中维护：修改输入 PDF、输出目录、backend 以及两套后端专属选项。未知键（以 __ 开头）仅为注释，可被忽略。合并优先级：环境变量 < 本文件 < 命令行。",
 
-  "input": "sample_pdfs/标讯-启东市吕四港镇大洋港小学综合楼工程的招标公告.pdf",
+  "__输入输出": "input 可为单个 PDF 或目录（相对路径优先相对当前工作目录，其次项目根）。output_dir 为结果根目录；json/markdown 默认在其子目录 json、markdown，也可用 json_output_dir、markdown_output_dir 覆盖。",
+
+  "input": "标讯-启东市吕四港镇大洋港小学综合楼工程的招标公告.pdf",
   "output_dir": "output",
+  "json_output_dir": null,
+  "markdown_output_dir": null,
 
-  "backend": "mineru",
+  "__运行选项": "recursive：目录输入时是否递归子目录。quiet：减少控制台输出。",
+
+  "recursive": false,
+  "quiet": false,
+
+  "__Markdown输出": "markdown_by_page：true 时在 markdown 目录额外生成 ``{文件名}_by_page.md``，按 PDF 页聚合正文并标注推断的页面标题与页码，便于下游大模型按页检索；false 则仅生成顺序版 ``{文件名}.md``。",
+
+  "markdown_by_page": true,
+
+  "__后端选择": "backend：mineru 表示调用本地 MinerU 源码 CLI；opendataloader 表示调用 Java 包 opendataloader_pdf（须 Java 11+）。",
+
+  "backend": "opendataloader",
+
+  "__MinerU": "以下仅在 backend=mineru 时必填。mineru_project_root：含 mineru 包的仓库根。mineru_backend：传给 CLI 的 -b（如 pipeline）。mineru_api_url：常驻 API 根 URL；null 则每次临时起本地服务。mineru_model_source：local / huggingface / modelscope；null 时若自动生成 tools 则可能设为 local。mineru_tools_config_json：MINERU_TOOLS_CONFIG_JSON；null 时可按 mineru.local.json 或本地 models 自动生成临时 JSON。mineru_cli_timeout_sec：子进程超时秒数；null 表示不限。",
+
   "mineru_project_root": "MinerU",
   "mineru_backend": "pipeline",
   "mineru_api_url": null,
@@ -12,17 +30,20 @@
   "mineru_tools_config_json": null,
   "mineru_cli_timeout_sec": null,
 
-  "hybrid": "off",
+  "__OpenDataLoader": "以下仅在 backend=opendataloader 时必填。table_method：表格策略 default 或 cluster。reading_order：阅读顺序 xycut 或 off。hybrid：off 关闭 Docling hybrid；docling-fast / hancom-ai 须配合 hybrid_url。hybrid_mode：auto 或 full（full 常配合 OCR）。hybrid_timeout：毫秒，字符串形式，\"0\" 表示不限。hybrid_fallback：hybrid 失败是否回落 Java 管线。hybrid_health_timeout_sec：调用 hybrid_url/health 探测的超时（秒）。skip_health_check：true 跳过探测（离线调试可用）；false 时启用 hybrid 会先探测服务是否存活。",
+
+  "hybrid": "docling-fast",
   "hybrid_url": "http://127.0.0.1:5002",
-  "hybrid_mode": "auto",
+  "hybrid_mode": "full",
   "hybrid_timeout": "0",
-  "hybrid_fallback": false,
+  "hybrid_fallback": true,
+  "hybrid_health_timeout_sec": 3.0,
+  "skip_health_check": false,
 
   "table_method": "cluster",
   "reading_order": "xycut",
 
-  "recursive": false,
-  "quiet": false,
+  "__视觉与VLM": "visual_tagging：off / clip / vlm（vlm 需下方 API）。visual_min_score：标签置信度阈值。vlm_*：OpenAI 兼容视觉接口；密钥可用环境变量 OPENDATALOADER_VLM_API_KEY。vlm_fallback：页级转写 off/auto/force。vlm_page_transcribe_min_timeout_sec：页级请求超时取下限 max(vlm_timeout_sec, 本值)；仅在 vlm_fallback 非 off 时必填。",
 
   "visual_tagging": "off",
   "visual_min_score": 0.5,
@@ -38,6 +59,7 @@
   "vlm_fallback": "off",
   "vlm_fallback_threshold": 80,
   "vlm_fallback_dpi": 120,
+  "vlm_page_transcribe_min_timeout_sec": null,
 
   "vlm_page_system_prompt": null,
   "vlm_page_user_prompt_template": null

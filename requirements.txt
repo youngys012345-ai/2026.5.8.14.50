@@ -1,0 +1,10 @@
+# PDF 抽取管线（Python 3.12；OpenDataLoader 需系统安装 Java 11+）
+# 创建环境：py -3.12 -m venv .venv  →  .venv\Scripts\activate  →  pip install -r requirements.txt
+#
+# Hybrid（Docling）服务（pipeline.json 中 hybrid 非 off 时需要）：
+#   pip install "opendataloader-pdf[hybrid]"
+#   opendataloader-pdf-hybrid --port 5002
+
+opendataloader-pdf[hybrid]>=2.4,<3
+pymupdf>=1.24.0
+Pillow>=10.0.0

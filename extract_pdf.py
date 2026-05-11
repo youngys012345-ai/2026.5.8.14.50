@@ -7,7 +7,9 @@ PDF 批量解析：
   将 content_list 转为统一 kids 结构。
 - **opendataloader**：调用 ``opendataloader_pdf.convert``（需 Java 11+）。
 
-默认将结果写入项目下 ``output/json`` 与 ``output/markdown``（可用 ``-o`` 指定根目录）。
+输出目录、后端参数等均在项目根 ``pipeline.json``（或 ``--config``）中配置，代码内不写业务默认值。
+
+统一 JSON 会导出 ``output/markdown/<stem>.md``；``markdown_by_page`` 为 true 时另存 ``<stem>_by_page.md``（按页分块、标页码与推断标题，便于大模型按页处理）。
 
 可选：
 - ``--visual-tagging clip|vlm``：对裁剪图做签名/指印/印章识别并回填。
@@ -31,7 +33,7 @@ import os
 import shutil
 import tempfile
 
-from document_export import document_to_markdown
+from document_export import document_to_markdown, document_to_markdown_by_page
 from mineru_adapter import (
     MinerUExtractionError,
     convert_mineru_content_list_to_document,
@@ -95,7 +97,7 @@ def _auto_fill_local_mineru_settings(args: argparse.Namespace, workspace: Path) 
     3. 兼容旧路径：项目根 ``local_models/mineru/pipeline``。
     命中本地目录时生成临时 tools JSON，并设置 ``mineru_model_source=local``。
     """
-    if getattr(args, "backend", "mineru") != "mineru":
+    if getattr(args, "backend", None) != "mineru":
         return
 
     local_cfg = workspace / "config" / "mineru.local.json"
@@ -129,17 +131,6 @@ def _auto_fill_local_mineru_settings(args: argparse.Namespace, workspace: Path) 
 
     if args.mineru_model_source is None and args.mineru_tools_config_json:
         args.mineru_model_source = "local"
-
-
-def _auto_fill_mineru_project_root(args: argparse.Namespace, workspace: Path) -> None:
-    """若未配置 mineru_project_root，则优先本项目内 ``MinerU/``，再尝试上级目录。"""
-    raw = getattr(args, "mineru_project_root", None)
-    if isinstance(raw, str) and raw.strip():
-        return
-    for cand in (workspace / "MinerU", workspace.parent / "MinerU"):
-        if (cand / "mineru").is_dir():
-            args.mineru_project_root = str(cand.resolve())
-            return
 
 
 def _resolve_path_for_input(raw: str, workspace: Path) -> Path:
@@ -209,24 +200,6 @@ def _normalize_path_args_after_parse(args: argparse.Namespace, workspace: Path) 
             args.mineru_project_root = str(p.resolve())
 
 
-def _resolve_default_input(workspace: Path) -> Path | None:
-    """未传输入时：依次尝试 sample_pdfs、pdfs、历史示例文件名。"""
-    for folder_name in ("sample_pdfs", "pdfs"):
-        d = workspace / folder_name
-        if d.is_dir():
-            found = sorted(d.glob("*.pdf"))
-            if found:
-                return found[0].resolve()
-    candidate = workspace / "标讯-启东市吕四港镇大洋港小学综合楼工程的招标公告.pdf"
-    if candidate.is_file():
-        return candidate.resolve()
-    legacy = workspace.parent / "pdfs" / "复杂跨页表格样例.pdf"
-    if legacy.is_file():
-        print(f"未指定 PDF，已使用样例: {legacy}", file=sys.stderr)
-        return legacy.resolve()
-    return None
-
-
 def _collect_pdf_files(input_path: Path, recursive: bool = False) -> list[Path]:
     """收集待处理 PDF（单文件或目录）。"""
     if input_path.is_file():
@@ -246,12 +219,12 @@ def _resolve_output_layout(
 ) -> tuple[Path, Path, Path]:
     """
     解析输出目录布局。
+    ``output_dir`` 须在 pipeline.json 中配置（或由命令行覆盖）；若为 None 则抛出 ValueError。
     返回 (json_dir, markdown_dir, output_root)。
     """
-    if output_dir:
-        output_root = Path(output_dir).resolve()
-    else:
-        output_root = (workspace / "output").resolve()
+    if not output_dir or not str(output_dir).strip():
+        raise ValueError("output_dir 未配置：请在 pipeline.json 中设置 output_dir")
+    output_root = Path(output_dir).resolve()
     json_dir = Path(json_output_dir).resolve() if json_output_dir else (output_root / "json").resolve()
     md_dir = (
         Path(markdown_output_dir).resolve()
@@ -259,6 +232,98 @@ def _resolve_output_layout(
         else (output_root / "markdown").resolve()
     )
     return json_dir, md_dir, output_root
+
+
+def _validate_pipeline_args(args: argparse.Namespace) -> list[str]:
+    """校验 pipeline.json（及环境变量、命令行）是否提供完整配置；返回人类可读错误列表。"""
+    errs: list[str] = []
+
+    def _need(name: str) -> bool:
+        v = getattr(args, name, None)
+        return v is None or (isinstance(v, str) and not v.strip())
+
+    if _need("output_dir"):
+        errs.append("缺少 output_dir：请在 pipeline.json 中配置结果输出根目录（可用环境变量 OPENDATALOADER_OUTPUT_DIR 或命令行 -o 覆盖）。")
+    if _need("backend"):
+        errs.append("缺少 backend：须为 mineru 或 opendataloader。")
+    else:
+        b = getattr(args, "backend", None)
+        if b not in ("mineru", "opendataloader"):
+            errs.append(f"backend 无效: {b!r}，须为 mineru 或 opendataloader。")
+
+    if getattr(args, "recursive", None) is None:
+        errs.append("缺少 recursive：请在 pipeline.json 中配置布尔值（是否递归扫描子目录中的 PDF）。")
+    if getattr(args, "quiet", None) is None:
+        errs.append("缺少 quiet：请在 pipeline.json 中配置布尔值（静默模式）。")
+    if getattr(args, "markdown_by_page", None) is None:
+        errs.append(
+            "缺少 markdown_by_page：请在 pipeline.json 中配置布尔值；"
+            "为 true 时额外写出按页聚合的 *_by_page.md（便于大模型按页处理）。"
+        )
+
+    if _need("input"):
+        errs.append("缺少 input：请在 pipeline.json 中配置 PDF 文件或目录路径，或通过命令行参数传入。")
+
+    if getattr(args, "visual_tagging", None) is None:
+        errs.append("缺少 visual_tagging：off | clip | vlm。")
+    if getattr(args, "visual_min_score", None) is None:
+        errs.append("缺少 visual_min_score：视觉标签置信度下限（0~1）。")
+
+    if getattr(args, "vlm_fallback", None) is None:
+        errs.append("缺少 vlm_fallback：off | auto | force。")
+    if getattr(args, "vlm_fallback_threshold", None) is None:
+        errs.append("缺少 vlm_fallback_threshold：auto 模式下触发页级 VLM 的文本长度阈值。")
+    if getattr(args, "vlm_fallback_dpi", None) is None:
+        errs.append("缺少 vlm_fallback_dpi：页级 VLM 渲染 PDF 的 DPI。")
+
+    vt = getattr(args, "visual_tagging", None)
+    vf = getattr(args, "vlm_fallback", None)
+    vlm_needed = vt == "vlm" or vf != "off"
+    if vlm_needed:
+        if _need("vlm_api_base") or _need("vlm_model"):
+            errs.append("启用 visual_tagging=vlm 或 vlm_fallback 时，须在 pipeline.json 中配置 vlm_api_base 与 vlm_model。")
+        if getattr(args, "vlm_timeout_sec", None) is None:
+            errs.append("启用 VLM 时须配置 vlm_timeout_sec（秒）。")
+        if _need("vlm_chat_path"):
+            errs.append("启用 VLM 时须配置 vlm_chat_path（如 /v1/chat/completions）。")
+        if vf != "off" and getattr(args, "vlm_page_transcribe_min_timeout_sec", None) is None:
+            errs.append("启用 vlm_fallback 时须配置 vlm_page_transcribe_min_timeout_sec（页级转写请求下限超时，秒）。")
+
+    b = getattr(args, "backend", None)
+    if b == "mineru":
+        if _need("mineru_project_root"):
+            errs.append("backend=mineru 时须在 pipeline.json 中配置 mineru_project_root（MinerU 仓库根目录，须含 mineru/）。")
+        if _need("mineru_backend"):
+            errs.append("backend=mineru 时须配置 mineru_backend（传给 MinerU CLI 的 -b，如 pipeline）。")
+    elif b == "opendataloader":
+        if _need("table_method"):
+            errs.append("backend=opendataloader 时须配置 table_method（OpenDataLoader：default | cluster）。")
+        if _need("reading_order"):
+            errs.append("backend=opendataloader 时须配置 reading_order（OpenDataLoader：xycut | off）。")
+        if getattr(args, "hybrid", None) is None:
+            errs.append("backend=opendataloader 时须配置 hybrid：off | docling-fast | hancom-ai。")
+        else:
+            h = getattr(args, "hybrid", "")
+            if h not in ("off", "docling-fast", "hancom-ai"):
+                errs.append(f"hybrid 无效: {h!r}。")
+            elif h != "off":
+                if _need("hybrid_url"):
+                    errs.append("启用 hybrid 时须配置 hybrid_url（Docling hybrid 服务根 URL）。")
+        if getattr(args, "hybrid_mode", None) is None:
+            errs.append("backend=opendataloader 时须配置 hybrid_mode（hybrid 关闭时仍会传给底层占位，建议填 auto）。")
+        if getattr(args, "hybrid_timeout", None) is None:
+            errs.append("backend=opendataloader 时须配置 hybrid_timeout（毫秒字符串；hybrid 关闭时可填 \"0\"）。")
+        if getattr(args, "hybrid_health_timeout_sec", None) is None:
+            errs.append("backend=opendataloader 时须配置 hybrid_health_timeout_sec（探测 hybrid /health 的超时秒数）。")
+        if getattr(args, "hybrid_fallback", None) is None:
+            errs.append("backend=opendataloader 时须配置 hybrid_fallback（hybrid 失败时是否回落 Java 管线）。")
+        if getattr(args, "skip_health_check", None) is None:
+            errs.append(
+                "backend=opendataloader 时须配置 skip_health_check（是否跳过 hybrid 的 /health 探测；"
+                "仅用 Java 管线时可填 true）。"
+            )
+
+    return errs
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -269,19 +334,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         default=None,
-        help="JSON 配置文件（与环境变量、CLI 合并），示例见 config/pipeline.example.json",
+        help="JSON 配置文件（与环境变量、CLI 合并）；默认加载项目根 pipeline.json；示例见 config/pipeline.example.json",
     )
     parser.add_argument(
         "input",
         nargs="?",
         default=None,
-        help="输入 PDF 或目录（默认：sample_pdfs / pdfs 中首个 PDF）",
+        help="输入 PDF 或目录（通常写在 pipeline.json；命令行传入时优先生效）",
     )
     parser.add_argument(
         "-o",
         "--output-dir",
         default=None,
-        help="输出根目录；其下默认包含 json/ 与 markdown/（未单独指定时）",
+        help="输出根目录（覆盖 pipeline.json 中的 output_dir）",
     )
     parser.add_argument(
         "--json-output-dir",
@@ -296,23 +361,24 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--backend",
         choices=("mineru", "opendataloader"),
-        default="mineru",
-        help="抽取后端：mineru（本地 MinerU 源码）或 opendataloader（Java / opendataloader-pdf）",
+        default=None,
+        help="抽取后端：mineru（本地 MinerU）或 opendataloader（Java / opendataloader-pdf）",
     )
     parser.add_argument(
         "--mineru-project-root",
         default=None,
-        help="MinerU 源码仓库根路径（须含 mineru/）；默认 ./MinerU 或 ../MinerU",
+        help="MinerU 源码仓库根路径（须含 mineru/）",
     )
     parser.add_argument(
         "--recursive",
-        action="store_true",
-        help="目录输入时递归子目录中的 PDF",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="目录输入时是否递归子目录中的 PDF（可与 --no-recursive 显式关闭）",
     )
     parser.add_argument(
         "--mineru-backend",
-        default="pipeline",
-        help="MinerU -b backend（默认 pipeline；亦可用 hybrid-auto-engine 等与官方 CLI 一致）",
+        default=None,
+        help="MinerU CLI 的 -b backend（如 pipeline）",
     )
     parser.add_argument(
         "--mineru-api-url",
@@ -339,62 +405,77 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--hybrid",
         choices=("off", "docling-fast", "hancom-ai"),
-        default="off",
+        default=None,
         help="OpenDataLoader hybrid（仅 backend=opendataloader）",
     )
     parser.add_argument(
         "--hybrid-url",
-        default="http://127.0.0.1:5002",
-        help="hybrid 服务 URL",
+        default=None,
+        help="hybrid 服务根 URL",
     )
     parser.add_argument(
         "--hybrid-mode",
         choices=("auto", "full"),
-        default="auto",
+        default=None,
         help="OpenDataLoader hybrid_mode",
     )
     parser.add_argument(
         "--hybrid-timeout",
-        default="0",
-        help="hybrid_timeout（毫秒，0 表示不限制）",
+        default=None,
+        help="hybrid_timeout（毫秒字符串，0 表示不限制）",
     )
     parser.add_argument(
         "--hybrid-fallback",
-        action="store_true",
-        help="hybrid 失败时回落 Java 原生管线",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="hybrid 失败时是否回落 Java 原生管线",
+    )
+    parser.add_argument(
+        "--hybrid-health-timeout-sec",
+        type=float,
+        default=None,
+        help="调用 hybrid /health 探测的超时（秒）",
     )
     parser.add_argument(
         "--skip-health-check",
-        action="store_true",
-        help="兼容占位（当前脚本未使用）",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="是否跳过 hybrid 启动前的 /health 探测（离线或已知服务不稳定时可设 true）",
     )
     parser.add_argument(
         "--table-method",
         choices=("default", "cluster"),
-        default="cluster",
+        default=None,
         help="OpenDataLoader table_method",
     )
     parser.add_argument(
         "--reading-order",
         choices=("xycut", "off"),
-        default="xycut",
+        default=None,
         help="OpenDataLoader reading_order",
     )
     parser.add_argument(
         "--quiet",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="静默模式",
+    )
+    parser.add_argument(
+        "--markdown-by-page",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="是否额外输出按页聚合的 Markdown（*_by_page.md）",
     )
     parser.add_argument(
         "--visual-tagging",
         choices=("off", "clip", "vlm"),
-        default="off",
-        help="视觉标签：off（默认）；clip；vlm（需配置 VLM）",
+        default=None,
+        help="视觉标签：off；clip；vlm（需完整 VLM 配置）",
     )
     parser.add_argument(
         "--visual-min-score",
         type=float,
-        default=0.5,
+        default=None,
         help="视觉标签置信度下限",
     )
     parser.add_argument(
@@ -421,7 +502,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--vlm-chat-path",
         default=None,
-        help="chat completions 路径（默认 /v1/chat/completions）",
+        help="chat completions 路径（如 /v1/chat/completions）",
     )
     parser.add_argument(
         "--vlm-system-prompt",
@@ -436,20 +517,26 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--vlm-fallback",
         choices=("off", "auto", "force"),
-        default="off",
-        help="页级 VLM 回退：off；auto（文本极短时）；force（每页调用，慎用成本）",
+        default=None,
+        help="页级 VLM 回退：off；auto；force",
     )
     parser.add_argument(
         "--vlm-fallback-threshold",
         type=int,
-        default=80,
-        help="auto 模式下，结构化文本总长度低于该阈值则触发 VLM 回退",
+        default=None,
+        help="auto 模式下触发页级 VLM 的结构化文本长度阈值",
     )
     parser.add_argument(
         "--vlm-fallback-dpi",
         type=int,
-        default=120,
-        help="VLM 回退时 PDF 渲染 DPI",
+        default=None,
+        help="页级 VLM 渲染 PDF 的 DPI",
+    )
+    parser.add_argument(
+        "--vlm-page-transcribe-min-timeout-sec",
+        type=float,
+        default=None,
+        help="页级转写 HTTP 超时取下限（秒），实际超时为 max(vlm_timeout_sec, 本值)",
     )
     parser.add_argument(
         "--vlm-page-system-prompt",
@@ -465,32 +552,44 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _require_vlm_config(args: argparse.Namespace) -> tuple[str, str, float, str] | None:
-    """若未配置完整 VLM 参数则返回 None。"""
+    """若未配置完整 VLM 参数则返回 None（超时与路径须在 pipeline.json 中写明）。"""
     api_base = getattr(args, "vlm_api_base", None)
     model = getattr(args, "vlm_model", None)
-    if not api_base or not model:
-        return None
     timeout_sec = getattr(args, "vlm_timeout_sec", None)
-    if timeout_sec is None:
-        timeout_sec = 120.0
-    chat_path = getattr(args, "vlm_chat_path", None) or "/v1/chat/completions"
-    return api_base, model, float(timeout_sec), chat_path
+    chat_path = getattr(args, "vlm_chat_path", None)
+    if not api_base or not model or timeout_sec is None or not chat_path:
+        return None
+    return api_base, model, float(timeout_sec), str(chat_path).strip()
 
 
 def main() -> int:
     config_from_argv, argv_rest = pop_config_path_from_argv(sys.argv[1:])
     parser = _build_parser()
     merged = merge_defaults({}, defaults_from_environment())
+    workspace = Path(__file__).resolve().parent
     cfg_path = config_from_argv
-    if cfg_path is not None:
-        resolved_cfg, cfg_hint = resolve_pipeline_config_path(cfg_path)
-        if resolved_cfg is None:
-            print(f"配置文件不存在: {cfg_path}", file=sys.stderr)
-            return 1
-        if cfg_hint:
-            print(cfg_hint, file=sys.stderr)
-        cfg_path = resolved_cfg
-        merged.update(load_config_file(cfg_path))
+    if cfg_path is None:
+        default_pipeline = workspace / "pipeline.json"
+        resolved_auto, hint_auto = resolve_pipeline_config_path(default_pipeline)
+        cfg_path = resolved_auto
+        if hint_auto:
+            print(hint_auto, file=sys.stderr)
+    if cfg_path is None:
+        example = workspace / "config" / "pipeline.example.json"
+        print(
+            "错误: 未找到 pipeline.json。请将 config/pipeline.example.json 复制为项目根 pipeline.json 并按需修改。",
+            file=sys.stderr,
+        )
+        print(f"模板路径: {example}", file=sys.stderr)
+        return 1
+    resolved_cfg, cfg_hint = resolve_pipeline_config_path(cfg_path)
+    if resolved_cfg is None:
+        print(f"配置文件不存在: {cfg_path}", file=sys.stderr)
+        return 1
+    if cfg_hint:
+        print(cfg_hint, file=sys.stderr)
+    cfg_path = resolved_cfg
+    merged.update(load_config_file(cfg_path))
     dests = {
         a.dest
         for a in parser._actions
@@ -498,39 +597,25 @@ def main() -> int:
     }
     parser.set_defaults(**{k: v for k, v in merged.items() if k in dests})
     args = parser.parse_args(argv_rest)
-    workspace = Path(__file__).resolve().parent
     _normalize_path_args_after_parse(args=args, workspace=workspace)
+    errors = _validate_pipeline_args(args)
+    if errors:
+        for line in errors:
+            print(line, file=sys.stderr)
+        return 1
     try:
         _auto_fill_local_mineru_settings(args=args, workspace=workspace)
-        backend = getattr(args, "backend", "mineru")
+        backend = getattr(args, "backend")
 
         mineru_src: Path | None = None
         if backend == "mineru":
-            _auto_fill_mineru_project_root(args=args, workspace=workspace)
-            mpr = getattr(args, "mineru_project_root", None)
-            if not isinstance(mpr, str) or not mpr.strip():
-                print(
-                    "请配置 mineru_project_root：指向本地 MinerU 仓库根目录（含 mineru/），"
-                    "或置于本项目 MinerU/、上级 ../MinerU；也可设置环境变量 MINERU_PROJECT_ROOT。",
-                    file=sys.stderr,
-                )
-                return 1
-            mineru_src = Path(mpr.strip()).resolve()
+            mpr = getattr(args, "mineru_project_root", "")
+            mineru_src = Path(str(mpr).strip()).resolve()
             if not (mineru_src / "mineru").is_dir():
                 print(f"MinerU 源码路径无效（缺少 mineru/）: {mineru_src}", file=sys.stderr)
                 return 1
 
-        if args.input:
-            input_path = Path(args.input).resolve()
-        else:
-            default_input = _resolve_default_input(workspace)
-            if default_input is None:
-                print(
-                    "请指定 PDF 或目录，或将示例 PDF 放入 sample_pdfs/ 目录。",
-                    file=sys.stderr,
-                )
-                return 1
-            input_path = default_input
+        input_path = Path(args.input).resolve()
 
         pdf_files = _collect_pdf_files(input_path, recursive=args.recursive)
         if not pdf_files:
@@ -580,11 +665,12 @@ def main() -> int:
                 )
                 return 1
             api_base, model, timeout_sec, chat_path = cred_fb
+            min_page = float(args.vlm_page_transcribe_min_timeout_sec)
             page_transcriber = build_openai_compatible_vlm_page_transcriber(
                 api_base=api_base,
                 api_key=args.vlm_api_key if isinstance(args.vlm_api_key, str) and args.vlm_api_key else None,
                 model=model,
-                timeout_sec=max(timeout_sec, 180.0),
+                timeout_sec=max(timeout_sec, min_page),
                 system_prompt=args.vlm_page_system_prompt if isinstance(args.vlm_page_system_prompt, str) else None,
                 user_prompt_template=(
                     args.vlm_page_user_prompt_template
@@ -649,8 +735,12 @@ def main() -> int:
                         hybrid_timeout=args.hybrid_timeout,
                         hybrid_fallback=args.hybrid_fallback,
                         quiet=args.quiet,
+                        hybrid_health_timeout_sec=float(args.hybrid_health_timeout_sec),
+                        skip_hybrid_health_check=bool(args.skip_health_check),
                     )
                     document = load_opendataloader_document(json_path_odl, pdf)
+                    # Java 侧原生 .md 通常为连续正文，不含可靠页码分段；需要按页引用时应以 JSON（kids.page number）
+                    # 及后续生成的 ``*_by_page.md``（document_to_markdown_by_page）为准。
                     if md_native and md_native.is_file():
                         dest_native = md_out_dir / f"{pdf.stem}_opendataloader_native.md"
                         shutil.copy2(md_native, dest_native)
@@ -714,9 +804,13 @@ def main() -> int:
 
             md_text = document_to_markdown(document)
             (md_out_dir / f"{pdf.stem}.md").write_text(md_text, encoding="utf-8")
+            if args.markdown_by_page:
+                md_by_page = document_to_markdown_by_page(document)
+                (md_out_dir / f"{pdf.stem}_by_page.md").write_text(md_by_page, encoding="utf-8")
 
             if not args.quiet:
-                print(f"完成: {pdf.name} -> {json_path_final.name} + {pdf.stem}.md")
+                extra = f" + {pdf.stem}_by_page.md" if args.markdown_by_page else ""
+                print(f"完成: {pdf.name} -> {json_path_final.name} + {pdf.stem}.md{extra}")
 
         if not args.quiet:
             print(f"全部完成，共 {len(pdf_files)} 个 PDF。")

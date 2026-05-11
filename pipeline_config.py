@@ -3,7 +3,8 @@
 """
 抽取管线配置：环境变量 + JSON 文件合并，供 extract_pdf 等脚本复用。
 
-合并优先级（后者覆盖前者）：内置默认值 → 环境变量 → JSON 配置 → 命令行参数。
+合并优先级（后者覆盖前者）：环境变量 → pipeline.json → 命令行参数。
+业务默认值应写在项目根的 pipeline.json（或 --config 指定的文件）中，不在 Python 代码里写死。
 """
 
 from __future__ import annotations
@@ -51,6 +52,9 @@ CONFIG_KEYS = frozenset(
         "mineru_cli_timeout_sec",
         "mineru_project_root",
         "input",
+        "hybrid_health_timeout_sec",
+        "vlm_page_transcribe_min_timeout_sec",
+        "markdown_by_page",
     }
 )
 
@@ -120,6 +124,12 @@ def defaults_from_environment() -> dict[str, Any]:
     ht = _env_str("OPENDATALOADER_HYBRID_TIMEOUT", None)
     if ht is not None:
         d["hybrid_timeout"] = ht
+    hhs = _env_str("OPENDATALOADER_HYBRID_HEALTH_TIMEOUT_SEC", None)
+    if hhs is not None and hhs != "":
+        try:
+            d["hybrid_health_timeout_sec"] = float(hhs)
+        except ValueError:
+            pass
     if os.environ.get("OPENDATALOADER_SKIP_HEALTH_CHECK"):
         d["skip_health_check"] = _env_bool("OPENDATALOADER_SKIP_HEALTH_CHECK", False)
 
@@ -179,6 +189,14 @@ def defaults_from_environment() -> dict[str, Any]:
         d["recursive"] = _env_bool("OPENDATALOADER_RECURSIVE", False)
     if os.environ.get("OPENDATALOADER_QUIET"):
         d["quiet"] = _env_bool("OPENDATALOADER_QUIET", False)
+    if os.environ.get("OPENDATALOADER_MARKDOWN_BY_PAGE"):
+        d["markdown_by_page"] = _env_bool("OPENDATALOADER_MARKDOWN_BY_PAGE", False)
+    vpmt = _env_str("OPENDATALOADER_VLM_PAGE_TRANSCRIBE_MIN_TIMEOUT_SEC", None)
+    if vpmt is not None and vpmt != "":
+        try:
+            d["vlm_page_transcribe_min_timeout_sec"] = float(vpmt)
+        except ValueError:
+            pass
     return d
 
 

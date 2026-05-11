@@ -1,15 +1,28 @@
 {
-  "__说明": [
-    "MinerU 不包含在本仓库：请单独 clone 官方 MinerU 到 ./MinerU（或与项目同级 ../MinerU，未配置 mineru_project_root 时会自动探测）。安装依赖按 MinerU 文档；pipeline 模型可用 mineru-models-download 或放入 MinerU/models、local_models。",
-    "mineru_project_root：指向上述 MinerU 仓库根（含 mineru/）。未指定 mineru_tools_config_json 时，优先 MinerU/models，其次 local_models/mineru/pipeline。",
-    "对比 OpenDataLoader 时可另设 output_dir 或 --backend opendataloader。",
-    "visual_tagging：off（默认）；clip；vlm（需 vlm_api_base、vlm_model）。标签写入 JSON 并追加 Markdown 文末摘要。"
-  ],
+  "__readme": "复制本文件为项目根 pipeline.json 后按需修改。键名与命令行长选项一致（连字符改为下划线）。以 __ 开头的键仅为说明，加载时会被忽略。",
 
-  "input": "sample_pdfs/标讯-启东市吕四港镇大洋港小学综合楼工程的招标公告.pdf",
+  "__输入输出": "input：PDF 文件或目录。output_dir：输出根目录；json/markdown 默认在子目录 json、markdown。json_output_dir、markdown_output_dir：可单独指定，填 null 表示使用默认子目录。",
+
+  "input": "sample_pdfs/示例.pdf",
   "output_dir": "output",
+  "json_output_dir": null,
+  "markdown_output_dir": null,
+
+  "__运行选项": "recursive：是否递归子目录。quiet：静默。",
+
+  "recursive": false,
+  "quiet": false,
+
+  "__Markdown": "markdown_by_page：是否额外输出按页聚合的 *_by_page.md（适合 LLM 页级切块）。",
+
+  "markdown_by_page": false,
+
+  "__后端": "mineru：本地 MinerU 仓库 + python -m mineru.cli.client。opendataloader：pip install opendataloader-pdf + Java 11。",
 
   "backend": "mineru",
+
+  "__章节_MinerU": "backend=mineru 时必填 mineru_project_root、mineru_backend；其余可为 null。",
+
   "mineru_project_root": "MinerU",
   "mineru_backend": "pipeline",
   "mineru_api_url": null,
@@ -17,17 +30,20 @@
   "mineru_tools_config_json": null,
   "mineru_cli_timeout_sec": null,
 
+  "__章节_OpenDataLoader": "backend=opendataloader 时须配置本节表格/ hybrid 等项；使用 MinerU 时可保留占位值或按需填写。hybrid=off 时 hybrid_url 仍可填占位；hybrid_mode、hybrid_timeout 建议仍填写（关闭 hybrid 时内部不使用）。",
+
+  "table_method": "cluster",
+  "reading_order": "xycut",
+
   "hybrid": "off",
   "hybrid_url": "http://127.0.0.1:5002",
   "hybrid_mode": "auto",
   "hybrid_timeout": "0",
   "hybrid_fallback": false,
+  "hybrid_health_timeout_sec": 3.0,
+  "skip_health_check": false,
 
-  "table_method": "cluster",
-  "reading_order": "xycut",
-
-  "recursive": false,
-  "quiet": false,
+  "__视觉与VLM": "visual_tagging=vlm 或 vlm_fallback 非 off 时须填写 vlm_api_base、vlm_model、vlm_timeout_sec、vlm_chat_path；vlm_fallback 非 off 时还须 vlm_page_transcribe_min_timeout_sec。",
 
   "visual_tagging": "off",
   "visual_min_score": 0.5,
@@ -43,6 +59,7 @@
   "vlm_fallback": "off",
   "vlm_fallback_threshold": 80,
   "vlm_fallback_dpi": 120,
+  "vlm_page_transcribe_min_timeout_sec": null,
 
   "vlm_page_system_prompt": null,
   "vlm_page_user_prompt_template": null

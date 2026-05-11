@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
+from urllib.request import urlopen
 
 
 class OpenDataLoaderExtractionError(RuntimeError):
@@ -25,6 +27,29 @@ def locate_opendataloader_json(work_dir: Path, pdf_file: Path) -> Path:
     return candidates[0].resolve()
 
 
+def _assert_hybrid_service_ready(hybrid_url: str, *, timeout_sec: float) -> None:
+    """
+    启用 hybrid 时，先探测 Docling Fast 服务是否可达（避免 Java CLI 打出长栈后才失败）。
+    hybrid_url 示例：http://127.0.0.1:5002
+    """
+    base = hybrid_url.rstrip("/")
+    health = f"{base}/health"
+    try:
+        with urlopen(health, timeout=timeout_sec) as resp:
+            if getattr(resp, "status", 200) >= 400:
+                raise OpenDataLoaderExtractionError(
+                    f"Hybrid 服务响应异常: GET {health} -> HTTP {getattr(resp, 'status', '?')}"
+                )
+    except URLError as exc:
+        raise OpenDataLoaderExtractionError(
+            "未检测到 Docling Hybrid 服务（full/auto 模式依赖该服务）。\n"
+            "请先在本机启动：pip install \"opendataloader-pdf[hybrid]\" 后执行\n"
+            "  opendataloader-pdf-hybrid --port 5002\n"
+            "若使用其他端口，请在配置中同步修改 hybrid_url。\n"
+            f"当前探测: GET {health} 失败 — {exc}"
+        ) from exc
+
+
 def locate_opendataloader_markdown(work_dir: Path, pdf_file: Path) -> Path | None:
     stem = pdf_file.stem
     direct = work_dir / f"{stem}.md"
@@ -38,14 +63,16 @@ def run_opendataloader_for_pdf(
     pdf_file: Path,
     work_dir: Path,
     *,
-    table_method: str = "cluster",
-    reading_order: str = "xycut",
-    hybrid: str | None = None,
-    hybrid_url: str | None = None,
-    hybrid_mode: str = "auto",
-    hybrid_timeout: str = "0",
-    hybrid_fallback: bool = False,
-    quiet: bool = False,
+    table_method: str,
+    reading_order: str,
+    hybrid: str | None,
+    hybrid_url: str | None,
+    hybrid_mode: str,
+    hybrid_timeout: str | int | float,
+    hybrid_fallback: bool,
+    quiet: bool,
+    hybrid_health_timeout_sec: float,
+    skip_hybrid_health_check: bool,
 ) -> tuple[Path, Path | None]:
     """调用 ``opendataloader_pdf.convert``，返回 (json_path, markdown_path_or_none)。"""
     try:
@@ -69,8 +96,10 @@ def run_opendataloader_for_pdf(
         kwargs["hybrid"] = hybrid
         if hybrid_url:
             kwargs["hybrid_url"] = hybrid_url
+            if not skip_hybrid_health_check:
+                _assert_hybrid_service_ready(hybrid_url, timeout_sec=hybrid_health_timeout_sec)
         kwargs["hybrid_mode"] = hybrid_mode
-        kwargs["hybrid_timeout"] = hybrid_timeout
+        kwargs["hybrid_timeout"] = str(hybrid_timeout)
 
     try:
         opendataloader_pdf.convert(**kwargs)
