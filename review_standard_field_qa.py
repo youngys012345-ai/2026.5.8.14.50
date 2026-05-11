@@ -42,14 +42,61 @@ from pipeline_config import load_config_file, resolve_pipeline_config_path  # no
 from review_standard_llm_fill import (  # noqa: E402
     RESULT_FIELD,
     LlmEnvConfig,
-    _load_step_env_files,
-    _resolve_input_path,
-    _resolve_output_path,
     call_openai_compatible_chat,
     configure_logging,
     iter_top_level_sections,
     load_llm_config_from_env,
 )
+
+
+def _resolve_input_path(raw: str, workspace: Path) -> Path:
+    """
+    将配置或命令行中的输入路径解析为绝对路径。
+    相对路径：优先当前工作目录下已存在路径，否则项目根（与 review_standard_llm_fill 一致）。
+    """
+    p = Path(raw.strip())
+    if p.is_absolute():
+        return p.resolve()
+    cwd_hit = (Path.cwd() / p).resolve()
+    ws_hit = (workspace / p).resolve()
+    if cwd_hit.is_file() or cwd_hit.is_dir():
+        return cwd_hit
+    if ws_hit.is_file() or ws_hit.is_dir():
+        return ws_hit
+    return cwd_hit
+
+
+def _resolve_output_path(raw: str, workspace: Path) -> Path:
+    """输出路径：相对路径锚定项目根。"""
+    p = Path(raw.strip())
+    if p.is_absolute():
+        return p.resolve()
+    return (workspace / p).resolve()
+
+
+def _load_step_env_files(workspace: Path) -> tuple[list[Path], bool]:
+    """
+    加载环节变量 .env（与 review_standard_llm_fill 逻辑一致）。
+    在本模块内重复实现，避免依赖对方私有符号导致版本不一致时 ImportError。
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return [], True
+
+    loaded: list[Path] = []
+    steps: list[tuple[Path, bool]] = [
+        (workspace / ".env", False),
+        (workspace / "环节变量.env", True),
+        (Path.cwd() / ".env", True),
+        (Path.cwd() / "环节变量.env", True),
+    ]
+    for path, override in steps:
+        if path.is_file():
+            load_dotenv(path, override=override)
+            loaded.append(path.resolve())
+    return loaded, False
+
 
 CONTENT_FIELD = "内容"
 HANDWRITING_FIELD = "是否需要识别手写体"
