@@ -32,10 +32,35 @@ Prompt 模板定义位置（换机迁移时优先核对）
 
 用法示例::
 
+    # 路径写在项目根 pipeline.json 的 review_standard_* 键中时可省略文件参数：
+    python review_standard_llm_fill.py
+
+    # 或与管线一致显式指定配置文件后仍可用命令行覆盖单一路径：
     set LLM_API_BASE=https://api.example.com/v1
     set LLM_API_KEY=sk-...
     set LLM_MODEL=gpt-4o-mini
     python review_standard_llm_fill.py --json 评审标准.json --markdown output/markdown/某案_by_page.md -o 评审标准_filled.json
+
+pipeline.json 中与本节相关的键（``load_config_file`` 会读取；``__`` 前缀键为说明，忽略）：
+
+- ``review_standard_json``：评审标准 JSON 路径（相对路径优先当前工作目录，其次项目根）。
+- ``review_standard_markdown``：extract_pdf 生成的 markdown（建议 ``*_by_page.md``）。
+- ``review_standard_pdf_text_file``：若不使用 markdown，可填纯文本抽取文件；与上一项二选一。
+- ``review_standard_output``：写出路径；未配置时默认 ``{评审标准文件名}_llm_filled.json``。
+
+合并优先级：**命令行参数** 优先于 **pipeline.json**（与 extract_pdf 一致）。
+
+---------------------------------------------------------------------------
+环节变量文件（.env）
+---------------------------------------------------------------------------
+
+启动时会自动加载（需 ``pip install python-dotenv``）：
+
+1. 项目根 ``.env`` — 不覆盖操作系统里已存在的环境变量；
+2. 项目根 ``环节变量.env`` — 覆盖上一步中已写入的同名键（便于把大模型密钥单独放此文件）；
+3. 当前工作目录下的 ``.env`` / ``环节变量.env`` — 在后加载，后者同名键覆盖前者。
+
+``LLM_API_BASE``、``LLM_MODEL`` 等仍在 ``load_llm_config_from_env()`` 中读取；须在加载 .env **之后**调用，故本脚本在 ``main`` 最先解析完命令行后即加载上述文件。
 """
 
 from __future__ import annotations
@@ -60,6 +85,58 @@ if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
 from vlm_client import _extract_message_content  # noqa: E402
+
+from pipeline_config import load_config_file, resolve_pipeline_config_path  # noqa: E402
+
+
+def _resolve_input_path(raw: str, workspace: Path) -> Path:
+    """
+    将配置或命令行中的输入文件路径解析为绝对路径。
+    相对路径：优先当前工作目录下存在则取之，否则用项目根（与 extract_pdf 一致）。
+    """
+    p = Path(raw.strip())
+    if p.is_absolute():
+        return p.resolve()
+    cwd_hit = (Path.cwd() / p).resolve()
+    ws_hit = (workspace / p).resolve()
+    if cwd_hit.is_file() or cwd_hit.is_dir():
+        return cwd_hit
+    if ws_hit.is_file() or ws_hit.is_dir():
+        return ws_hit
+    return cwd_hit
+
+
+def _resolve_output_path(raw: str, workspace: Path) -> Path:
+    """输出路径：相对路径锚定项目根，避免在其他目录启动时写到意外位置。"""
+    p = Path(raw.strip())
+    if p.is_absolute():
+        return p.resolve()
+    return (workspace / p).resolve()
+
+
+def _load_step_env_files(workspace: Path) -> tuple[list[Path], bool]:
+    """
+    加载环节变量 .env，供 LLM_* / OPENAI_* 等注入 os.environ。
+    返回 (已加载文件的绝对路径列表, 是否因未安装 python-dotenv 而跳过)。
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return [], True
+
+    loaded: list[Path] = []
+    # (路径, override)：先加载通用 .env，再由环节专用文件与当前目录覆盖
+    steps: list[tuple[Path, bool]] = [
+        (workspace / ".env", False),
+        (workspace / "环节变量.env", True),
+        (Path.cwd() / ".env", True),
+        (Path.cwd() / "环节变量.env", True),
+    ]
+    for path, override in steps:
+        if path.is_file():
+            load_dotenv(path, override=override)
+            loaded.append(path.resolve())
+    return loaded, False
 
 
 def _env_first(*names: str) -> str | None:
@@ -284,25 +361,32 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         description="按评审标准一级字段轮询大模型，把表格提取结果写入 JSON。"
     )
     p.add_argument(
+        "--config",
+        dest="config_path",
+        type=Path,
+        default=None,
+        help="管线 JSON（默认尝试项目根 pipeline.json）；从中读取 review_standard_* 路径。",
+    )
+    p.add_argument(
         "--json",
         dest="json_path",
-        required=True,
         type=Path,
-        help="评审标准等 JSON 路径（根级多个一级字段块）。",
+        default=None,
+        help="评审标准等 JSON 路径；未传则使用配置中的 review_standard_json。",
     )
     p.add_argument(
         "--markdown",
         dest="markdown_path",
         type=Path,
         default=None,
-        help="extract_pdf 等生成的 markdown（建议带页码的 _by_page.md）。",
+        help="extract_pdf 等生成的 markdown（建议带页码的 _by_page.md）；未传则用 review_standard_markdown。",
     )
     p.add_argument(
         "--pdf-text-file",
         dest="pdf_text_file",
         type=Path,
         default=None,
-        help="若未提供 --markdown，可用纯文本文件作为 PDF 抽取结果。",
+        help="若未提供 markdown，可用纯文本；未传则用 review_standard_pdf_text_file。",
     )
     p.add_argument(
         "-o",
@@ -310,7 +394,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         dest="output_path",
         type=Path,
         default=None,
-        help="输出 JSON 路径；默认在输入文件名后加 _llm_filled.json",
+        help="输出 JSON 路径；未传则用 review_standard_output，仍缺省则为输入文件名加 _llm_filled.json",
     )
     p.add_argument(
         "--dry-run",
@@ -329,15 +413,95 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=None,
         help="同时写入该路径的日志文件（UTF-8）。",
     )
-    ns = p.parse_args(argv)
-    if ns.markdown_path is None and ns.pdf_text_file is None:
-        p.error("请指定 --markdown 或 --pdf-text-file 之一作为 PDF 抽取内容来源")
-    return ns
+    return p.parse_args(argv)
+
+
+def _apply_pipeline_paths_to_args(
+    args: argparse.Namespace,
+    workspace: Path,
+    pipeline_cfg: dict[str, Any],
+) -> None:
+    """命令行已给出的路径不覆盖；仅从 pipeline 补齐缺失项。"""
+    if args.json_path is None:
+        raw = pipeline_cfg.get("review_standard_json")
+        if isinstance(raw, str) and raw.strip():
+            args.json_path = _resolve_input_path(raw, workspace)
+    if args.markdown_path is None:
+        raw = pipeline_cfg.get("review_standard_markdown")
+        if isinstance(raw, str) and raw.strip():
+            args.markdown_path = _resolve_input_path(raw, workspace)
+    if args.pdf_text_file is None:
+        raw = pipeline_cfg.get("review_standard_pdf_text_file")
+        if isinstance(raw, str) and raw.strip():
+            args.pdf_text_file = _resolve_input_path(raw, workspace)
+    if args.output_path is None:
+        raw = pipeline_cfg.get("review_standard_output")
+        if isinstance(raw, str) and raw.strip():
+            args.output_path = _resolve_output_path(raw, workspace)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    workspace = _repo_root
+    env_loaded, dotenv_missing = _load_step_env_files(workspace)
     configure_logging(level=args.log_level, log_file=args.log_file)
+    if dotenv_missing:
+        _LOG.warning(
+            "[环节:环境] 未安装 python-dotenv，已跳过 .env 加载；请执行 pip install python-dotenv"
+        )
+    elif env_loaded:
+        _LOG.info(
+            "[环节:环境] 已从环节变量文件载入 %s 个: %s",
+            len(env_loaded),
+            ", ".join(str(p) for p in env_loaded),
+        )
+    else:
+        _LOG.info(
+            "[环节:环境] 未找到项目根或当前目录下的 .env / 环节变量.env（可忽略若仅用系统环境变量）"
+        )
+
+    cfg_file = args.config_path
+    if cfg_file is None:
+        resolved, _ = resolve_pipeline_config_path(workspace / "pipeline.json")
+        cfg_file = resolved
+    pipeline_cfg: dict[str, Any] = {}
+    if cfg_file is not None and cfg_file.is_file():
+        try:
+            pipeline_cfg = load_config_file(cfg_file)
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            _LOG.exception("[环节:配置] 无法加载 %s: %s", cfg_file, e)
+            print(f"错误: 无法读取管线配置: {cfg_file}\n{e}", file=sys.stderr)
+            raise SystemExit(1) from e
+        _LOG.info("[环节:配置] 已载入 pipeline 片段 path=%s 键数=%s", cfg_file.resolve(), len(pipeline_cfg))
+    elif cfg_file is not None:
+        _LOG.warning("[环节:配置] 未找到配置文件，已忽略: %s", cfg_file)
+
+    if args.json_path is not None:
+        args.json_path = _resolve_input_path(str(args.json_path), workspace)
+    if args.markdown_path is not None:
+        args.markdown_path = _resolve_input_path(str(args.markdown_path), workspace)
+    if args.pdf_text_file is not None:
+        args.pdf_text_file = _resolve_input_path(str(args.pdf_text_file), workspace)
+    if args.output_path is not None:
+        p = args.output_path
+        args.output_path = p if p.is_absolute() else _resolve_output_path(str(p), workspace)
+
+    _apply_pipeline_paths_to_args(args, workspace, pipeline_cfg)
+
+    if args.json_path is None:
+        print(
+            "错误: 未指定评审标准 JSON。请在命令行使用 --json，"
+            "或在 pipeline.json 中设置 review_standard_json。",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if args.markdown_path is None and args.pdf_text_file is None:
+        print(
+            "错误: 未指定 PDF 抽取文本来源。请使用 --markdown 或 --pdf-text-file，"
+            "或在 pipeline.json 中设置 review_standard_markdown / review_standard_pdf_text_file。",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     _LOG.info(
         "[环节:启动] json=%s pdf文本源=%s 输出=%s dry_run=%s",

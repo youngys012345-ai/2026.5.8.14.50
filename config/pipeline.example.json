@@ -45,6 +45,10 @@
   "hybrid_force_ocr": false,
   "hybrid_ocr_lang": "ch_sim,en",
 
+  "__Hybrid_SSL": "内网 EasyOCR HTTPS 证书问题：hybrid_ca_bundle 指向合并 PEM；或离线复制用户目录 .EasyOCR；HYBRID_CA_BUNDLE 环境变量优先。详见 scripts/start_docling_hybrid.ps1 顶部注释。",
+
+  "hybrid_ca_bundle": null,
+
   "__视觉与VLM": "visual_tagging=vlm 或 vlm_fallback 非 off 时须填写 vlm_api_base、vlm_model、vlm_timeout_sec、vlm_chat_path；vlm_fallback 非 off 时还须 vlm_page_transcribe_min_timeout_sec。",
 
   "visual_tagging": "off",
@@ -64,5 +68,17 @@
   "vlm_page_transcribe_min_timeout_sec": null,
 
   "vlm_page_system_prompt": null,
-  "vlm_page_user_prompt_template": null
+  "vlm_page_user_prompt_template": null,
+
+  "__评审标准_LLM": "可选。填写后可直接运行 python review_standard_llm_fill.py；review_standard_output 为 null 时输出默认为 {评审标准.json 文件名}_llm_filled.json。",
+
+  "review_standard_json": null,
+  "review_standard_markdown": null,
+  "review_standard_pdf_text_file": null,
+  "review_standard_output": null,
+
+  "__评审栏目问答": "可选。填写 review_field_qa_input 后可 python review_standard_field_qa.py；输出默认为输入文件名_answered.json。",
+
+  "review_field_qa_input": null,
+  "review_field_qa_output": null
 }

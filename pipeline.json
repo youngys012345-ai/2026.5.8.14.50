@@ -42,6 +42,10 @@
   "hybrid_force_ocr": true,
   "hybrid_ocr_lang": "ch_sim,en",
 
+  "__Hybrid_SSL": "内网 EasyOCR 初始化若 HTTPS 证书校验失败：将企业 CA 与 certifi 合并为 PEM，填写 hybrid_ca_bundle（相对项目根或绝对路径）；见 scripts/start_docling_hybrid.ps1 注释。或在联网机预下载后复制 %USERPROFILE%\\.EasyOCR 到本机同路径。环境变量 HYBRID_CA_BUNDLE 优先于 hybrid_ca_bundle。",
+
+  "hybrid_ca_bundle": null,
+
   "table_method": "cluster",
   "reading_order": "xycut",
 
@@ -64,5 +68,17 @@
   "vlm_page_transcribe_min_timeout_sec": null,
 
   "vlm_page_system_prompt": null,
-  "vlm_page_user_prompt_template": null
+  "vlm_page_user_prompt_template": null,
+
+  "__评审标准_LLM": "review_standard_llm_fill.py：抽取完成后按文书类型调用大模型填「大模型返回结果」。路径写在此处后可执行 python review_standard_llm_fill.py 无需再传文件参数；命令行仍可覆盖。",
+
+  "review_standard_json": "评审标准.json",
+  "review_standard_markdown": "output/markdown/eastmoney_bef4bcf5f2faff08a78d49945e4ac8983320f367c450720c87ab8cc6ed5726e4.pdf_1_by_page.md",
+  "review_standard_pdf_text_file": null,
+  "review_standard_output": null,
+
+  "__评审栏目问答": "review_standard_field_qa.py：读取含「大模型返回结果」的 *_llm_filled.json，逐子字段调用大模型写入「内容」。review_field_qa_input：输入 JSON；review_field_qa_output：输出路径，null 则默认为 {stem}_answered.json。",
+
+  "review_field_qa_input": null,
+  "review_field_qa_output": null
 }

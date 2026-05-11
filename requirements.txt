@@ -5,7 +5,14 @@
 #   务必使用本 venv 启动；图片/扫描 PDF 需「全页强制 OCR」时脚本会读 pipeline.json 的 hybrid_force_ocr / hybrid_ocr_lang 并加 --force-ocr：
 #   .\scripts\start_docling_hybrid.ps1
 #   （等价手动：.\venv312\Scripts\opendataloader-pdf-hybrid.exe --port 5002 --force-ocr --ocr-lang ch_sim,en）
+#
+# 内网 / SSL（EasyOCR 首次运行会从网络拉取模型；证书校验失败时请任选其一）：
+#   - 将企业根 CA 与 pip 包 certifi 的 cacert.pem 合并为一个 PEM，写入 pipeline.json 的 hybrid_ca_bundle，或设置环境变量 HYBRID_CA_BUNDLE；
+#     启动脚本会为 hybrid 进程设置 SSL_CERT_FILE / REQUESTS_CA_BUNDLE（见 scripts/start_docling_hybrid.ps1）。
+#   - 完全离线：在可联网机器上用相同 hybrid_ocr_lang 启动过一次 hybrid 完成下载后，把该用户目录下的 .EasyOCR 文件夹复制到内网机
+#     同一账户的 %USERPROFILE%\.EasyOCR（路径须一致）。
 
 opendataloader-pdf[hybrid]>=2.4,<3
 pymupdf>=1.24.0
 Pillow>=10.0.0
+python-dotenv>=1.0.0

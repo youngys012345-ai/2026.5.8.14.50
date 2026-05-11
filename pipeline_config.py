@@ -57,6 +57,14 @@ CONFIG_KEYS = frozenset(
         "markdown_by_page",
         "hybrid_force_ocr",
         "hybrid_ocr_lang",
+        # 评审标准 LLM 环节（review_standard_llm_fill.py）
+        "review_standard_json",
+        "review_standard_markdown",
+        "review_standard_pdf_text_file",
+        "review_standard_output",
+        # 评审栏目问答（review_standard_field_qa.py）
+        "review_field_qa_input",
+        "review_field_qa_output",
     }
 )
 
