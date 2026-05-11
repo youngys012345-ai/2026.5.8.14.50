@@ -237,6 +237,7 @@ def enrich_document_with_visual_tags(
     min_score: float = 0.5,
 ) -> int:
     """为文档中的图片识别视觉类别，并优先回填到与图片几何相交的表格行或段落。"""
+    json_file_path = Path(json_file_path)
     detector = detect_fn or build_clip_detector()
     anchors = collect_anchor_nodes(document)
     if not anchors:

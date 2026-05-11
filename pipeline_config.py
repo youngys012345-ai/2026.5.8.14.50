@@ -55,6 +55,8 @@ CONFIG_KEYS = frozenset(
         "hybrid_health_timeout_sec",
         "vlm_page_transcribe_min_timeout_sec",
         "markdown_by_page",
+        "hybrid_force_ocr",
+        "hybrid_ocr_lang",
     }
 )
 
@@ -191,6 +193,12 @@ def defaults_from_environment() -> dict[str, Any]:
         d["quiet"] = _env_bool("OPENDATALOADER_QUIET", False)
     if os.environ.get("OPENDATALOADER_MARKDOWN_BY_PAGE"):
         d["markdown_by_page"] = _env_bool("OPENDATALOADER_MARKDOWN_BY_PAGE", False)
+    if os.environ.get("OPENDATALOADER_HYBRID_FORCE_OCR"):
+        d["hybrid_force_ocr"] = _env_bool("OPENDATALOADER_HYBRID_FORCE_OCR", False)
+    hol = _env_str("OPENDATALOADER_HYBRID_OCR_LANG", None)
+    if hol is not None:
+        d["hybrid_ocr_lang"] = hol
+
     vpmt = _env_str("OPENDATALOADER_VLM_PAGE_TRANSCRIBE_MIN_TIMEOUT_SEC", None)
     if vpmt is not None and vpmt != "":
         try:

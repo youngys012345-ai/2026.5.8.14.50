@@ -28,6 +28,7 @@ if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -322,6 +323,12 @@ def _validate_pipeline_args(args: argparse.Namespace) -> list[str]:
                 "backend=opendataloader 时须配置 skip_health_check（是否跳过 hybrid 的 /health 探测；"
                 "仅用 Java 管线时可填 true）。"
             )
+        if getattr(args, "hybrid_force_ocr", None) is None:
+            errs.append(
+                "backend=opendataloader 时须配置 hybrid_force_ocr（布尔值）。"
+                "图片/扫描类 PDF 在 hybrid_mode=full 时建议 true，并须用 scripts/start_docling_hybrid.ps1 "
+                "启动 Docling Fast（会加 --force-ocr）；该标志由服务进程读取，opendataloader_pdf.convert 无法在线修改。"
+            )
 
     return errs
 
@@ -441,6 +448,17 @@ def _build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="是否跳过 hybrid 启动前的 /health 探测（离线或已知服务不稳定时可设 true）",
+    )
+    parser.add_argument(
+        "--hybrid-force-ocr",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="是否要求 Docling Fast 以全页强制 OCR 运行（须启动 hybrid 时加 --force-ocr，见 scripts/start_docling_hybrid.ps1）",
+    )
+    parser.add_argument(
+        "--hybrid-ocr-lang",
+        default=None,
+        help="Docling OCR 语言（传给 hybrid 启动脚本），如 ch_sim,en",
     )
     parser.add_argument(
         "--table-method",
@@ -563,6 +581,12 @@ def _require_vlm_config(args: argparse.Namespace) -> tuple[str, str, float, str]
 
 
 def main() -> int:
+    if sys.version_info < (3, 9):
+        print(
+            f"错误: 需要 Python 3.9 及以上（当前 {sys.version.split()[0]}）。",
+            file=sys.stderr,
+        )
+        return 1
     config_from_argv, argv_rest = pop_config_path_from_argv(sys.argv[1:])
     parser = _build_parser()
     merged = merge_defaults({}, defaults_from_environment())
@@ -589,7 +613,23 @@ def main() -> int:
     if cfg_hint:
         print(cfg_hint, file=sys.stderr)
     cfg_path = resolved_cfg
-    merged.update(load_config_file(cfg_path))
+    try:
+        merged.update(load_config_file(cfg_path))
+    except json.JSONDecodeError as exc:
+        print(
+            f"pipeline.json 解析失败（须为标准 JSON：不要用 // 注释、勿尾随逗号）：{cfg_path}\n{exc}",
+            file=sys.stderr,
+        )
+        return 1
+    except UnicodeDecodeError as exc:
+        print(
+            f"pipeline.json 须以 UTF-8 编码保存（建议无 BOM）。读取失败: {cfg_path}\n{exc}",
+            file=sys.stderr,
+        )
+        return 1
+    except (OSError, ValueError) as exc:
+        print(f"读取配置文件失败: {cfg_path}\n{exc}", file=sys.stderr)
+        return 1
     dests = {
         a.dest
         for a in parser._actions
@@ -692,6 +732,13 @@ def main() -> int:
                         "提示: 未设置 mineru_api_url 时会临时启动 mineru-api；可常驻服务后填写 mineru_api_url。",
                         flush=True,
                     )
+            if backend == "opendataloader" and getattr(args, "hybrid", None) != "off":
+                if getattr(args, "hybrid_force_ocr", False):
+                    print(
+                        "提示: hybrid_force_ocr=true 时，Docling Fast 须带 --force-ocr 启动后才生效；"
+                        "请执行 .\\scripts\\start_docling_hybrid.ps1（读取 pipeline.json）或重启现有 hybrid 进程。",
+                        flush=True,
+                    )
 
         for pdf in pdf_files:
             document: dict
@@ -721,7 +768,9 @@ def main() -> int:
                     meta["mineru_content_list"] = str(content_list_path)
                     document["extraction_meta"] = meta
                 else:
-                    per_dir = (odl_work_root / pdf.stem).resolve()
+                    # OpenDataLoader/Java 在 Windows 上对「工作目录含中文」不稳；镜像目录使用哈希前缀名保持纯 ASCII。
+                    _odl_key = hashlib.sha256(str(pdf.resolve()).encode("utf-8")).hexdigest()[:24]
+                    per_dir = (odl_work_root / f"odl_{_odl_key}").resolve()
                     if per_dir.exists():
                         shutil.rmtree(per_dir, ignore_errors=True)
                     json_path_odl, md_native = run_opendataloader_for_pdf(
@@ -741,9 +790,11 @@ def main() -> int:
                     document = load_opendataloader_document(json_path_odl, pdf)
                     # Java 侧原生 .md 通常为连续正文，不含可靠页码分段；需要按页引用时应以 JSON（kids.page number）
                     # 及后续生成的 ``*_by_page.md``（document_to_markdown_by_page）为准。
-                    if md_native and md_native.is_file():
+                    # md_native 在部分环境下可能为 str，须先转为 Path 再调用 .is_file()。
+                    md_native_p: Path | None = Path(md_native) if md_native else None
+                    if md_native_p is not None and md_native_p.is_file():
                         dest_native = md_out_dir / f"{pdf.stem}_opendataloader_native.md"
-                        shutil.copy2(md_native, dest_native)
+                        shutil.copy2(md_native_p, dest_native)
                         meta_odl = document.get("extraction_meta")
                         if isinstance(meta_odl, dict):
                             meta_odl["opendataloader_native_markdown"] = str(dest_native)

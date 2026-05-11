@@ -42,6 +42,8 @@
   "hybrid_fallback": false,
   "hybrid_health_timeout_sec": 3.0,
   "skip_health_check": false,
+  "hybrid_force_ocr": false,
+  "hybrid_ocr_lang": "ch_sim,en",
 
   "__视觉与VLM": "visual_tagging=vlm 或 vlm_fallback 非 off 时须填写 vlm_api_base、vlm_model、vlm_timeout_sec、vlm_chat_path；vlm_fallback 非 off 时还须 vlm_page_transcribe_min_timeout_sec。",
 

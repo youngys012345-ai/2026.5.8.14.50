@@ -19,7 +19,7 @@ def test_markdown_by_page_groups_top_level_kids() -> None:
     assert "## 第 2 页 · Page 2" in md
     assert "第一页正文" in md
     assert "第二页段落" in md
-    assert "**本页标题（推断）:** 第二节" in md
+    assert "**本页标题:** 第二节" in md
     assert "<!-- page_index: 1 -->" in md
     assert "<!-- llm_layout: by-page -->" in md
 

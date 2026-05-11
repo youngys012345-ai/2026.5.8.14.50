@@ -3,7 +3,7 @@
 
   "__输入输出": "input 可为单个 PDF 或目录（相对路径优先相对当前工作目录，其次项目根）。output_dir 为结果根目录；json/markdown 默认在其子目录 json、markdown，也可用 json_output_dir、markdown_output_dir 覆盖。",
 
-  "input": "标讯-启东市吕四港镇大洋港小学综合楼工程的招标公告.pdf",
+  "input": "eastmoney_bef4bcf5f2faff08a78d49945e4ac8983320f367c450720c87ab8cc6ed5726e4.pdf_1.pdf",
   "output_dir": "output",
   "json_output_dir": null,
   "markdown_output_dir": null,
@@ -30,7 +30,7 @@
   "mineru_tools_config_json": null,
   "mineru_cli_timeout_sec": null,
 
-  "__OpenDataLoader": "以下仅在 backend=opendataloader 时必填。table_method：表格策略 default 或 cluster。reading_order：阅读顺序 xycut 或 off。hybrid：off 关闭 Docling hybrid；docling-fast / hancom-ai 须配合 hybrid_url。hybrid_mode：auto 或 full（full 常配合 OCR）。hybrid_timeout：毫秒，字符串形式，\"0\" 表示不限。hybrid_fallback：hybrid 失败是否回落 Java 管线。hybrid_health_timeout_sec：调用 hybrid_url/health 探测的超时（秒）。skip_health_check：true 跳过探测（离线调试可用）；false 时启用 hybrid 会先探测服务是否存活。",
+  "__OpenDataLoader": "以下仅在 backend=opendataloader 时必填。table_method：表格策略 default 或 cluster。reading_order：阅读顺序 xycut 或 off。hybrid：off 关闭 Docling hybrid；docling-fast / hancom-ai 须配合 hybrid_url。hybrid_mode：auto 或 full（full 常配合 OCR）。hybrid_timeout：毫秒，字符串形式，\"0\" 表示不限。hybrid_fallback：hybrid 失败是否回落 Java 管线。hybrid_health_timeout_sec：调用 hybrid_url/health 探测的超时（秒）。skip_health_check：true 跳过探测（离线调试可用）；false 时启用 hybrid 会先探测服务是否存活。hybrid_force_ocr：是否要求 Docling Fast 以「全页强制 OCR」启动（须 scripts/start_docling_hybrid.ps1 或手动 opendataloader-pdf-hybrid --force-ocr；Java convert 无法在线改）。hybrid_ocr_lang：传给 hybrid 的 EasyOCR/Docling 语言，如 ch_sim,en。",
 
   "hybrid": "docling-fast",
   "hybrid_url": "http://127.0.0.1:5002",
@@ -39,6 +39,8 @@
   "hybrid_fallback": true,
   "hybrid_health_timeout_sec": 3.0,
   "skip_health_check": false,
+  "hybrid_force_ocr": true,
+  "hybrid_ocr_lang": "ch_sim,en",
 
   "table_method": "cluster",
   "reading_order": "xycut",
