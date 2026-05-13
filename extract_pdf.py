@@ -9,6 +9,11 @@ PDF 批量解析：
 
 输出目录、后端参数等均在项目根 ``pipeline.json``（或 ``--config``）中配置，代码内不写业务默认值。
 
+模块导入时会通过 ``step_dotenv`` 加载项目根与当前目录下的 ``.env`` / ``环节变量.env``。
+若未设置 ``OPENDATALOADER_VLM_*``，VLM 可选用与评审环节相同的 ``LLM_API_BASE``（完整 POST URL）、
+``LLM_MODEL``、``LLM_API_KEY``；若 ``pipeline.json`` 中 ``vlm_api_base`` 为服务根且非 ``http(s)`` 全链，
+可另配 ``vlm_chat_path``（见 ``vlm_client.join_openai_compatible_endpoint_url``）。
+
 统一 JSON 会导出 ``output/markdown/<stem>.md``；``markdown_by_page`` 为 true 时另存 ``<stem>_by_page.md``（按页分块、标页码与推断标题，便于大模型按页处理）。
 
 可选：
@@ -26,6 +31,10 @@ from pathlib import Path
 _repo_root = Path(__file__).resolve().parent
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
+
+from step_dotenv import ensure_step_dotenv_loaded  # noqa: E402
+
+ensure_step_dotenv_loaded(_repo_root)
 
 import argparse
 import hashlib
@@ -56,6 +65,7 @@ from visual_tagging import enrich_document_with_visual_tags
 from vlm_client import (
     build_openai_compatible_vlm_detector,
     build_openai_compatible_vlm_page_transcriber,
+    is_http_endpoint_url,
 )
 from vlm_page_fallback import (
     document_needs_vlm_fallback,
@@ -285,8 +295,15 @@ def _validate_pipeline_args(args: argparse.Namespace) -> list[str]:
             errs.append("启用 visual_tagging=vlm 或 vlm_fallback 时，须在 pipeline.json 中配置 vlm_api_base 与 vlm_model。")
         if getattr(args, "vlm_timeout_sec", None) is None:
             errs.append("启用 VLM 时须配置 vlm_timeout_sec（秒）。")
-        if _need("vlm_chat_path"):
-            errs.append("启用 VLM 时须配置 vlm_chat_path（如 /v1/chat/completions）。")
+        vlm_base = getattr(args, "vlm_api_base", None)
+        vlm_path = getattr(args, "vlm_chat_path", None)
+        base_s = str(vlm_base).strip() if isinstance(vlm_base, str) and vlm_base.strip() else ""
+        path_s = str(vlm_path).strip() if isinstance(vlm_path, str) and vlm_path.strip() else ""
+        if not base_s or (not is_http_endpoint_url(base_s) and not path_s):
+            errs.append(
+                "启用 VLM 时：请将 vlm_api_base 设为完整 https:// 的 Chat Completions POST URL；"
+                "或同时配置 vlm_api_base（服务根）与 vlm_chat_path（如 /v1/chat/completions）。"
+            )
         if vf != "off" and getattr(args, "vlm_page_transcribe_min_timeout_sec", None) is None:
             errs.append("启用 vlm_fallback 时须配置 vlm_page_transcribe_min_timeout_sec（页级转写请求下限超时，秒）。")
 
@@ -569,15 +586,22 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _require_vlm_config(args: argparse.Namespace) -> tuple[str, str, float, str] | None:
-    """若未配置完整 VLM 参数则返回 None（超时与路径须在 pipeline.json 中写明）。"""
+def _require_vlm_config(args: argparse.Namespace) -> tuple[str, str, float, str | None] | None:
+    """若未配置完整 VLM 参数则返回 None。``vlm_api_base`` 为完整 ``http(s)`` URL 时 ``vlm_chat_path`` 可省略。"""
     api_base = getattr(args, "vlm_api_base", None)
     model = getattr(args, "vlm_model", None)
     timeout_sec = getattr(args, "vlm_timeout_sec", None)
     chat_path = getattr(args, "vlm_chat_path", None)
-    if not api_base or not model or timeout_sec is None or not chat_path:
+    if not api_base or not model or timeout_sec is None:
         return None
-    return api_base, model, float(timeout_sec), str(chat_path).strip()
+    base_s = str(api_base).strip()
+    path_s = str(chat_path).strip() if isinstance(chat_path, str) and chat_path.strip() else None
+    if is_http_endpoint_url(base_s):
+        # 完整 endpoint 时不再与 vlm_chat_path 拼接，避免误配两段导致 URL 错误
+        return base_s, str(model).strip(), float(timeout_sec), None
+    if not path_s:
+        return None
+    return base_s, str(model).strip(), float(timeout_sec), path_s
 
 
 def main() -> int:

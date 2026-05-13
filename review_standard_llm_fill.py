@@ -21,12 +21,14 @@ Prompt 模板定义位置（换机迁移时优先核对）
 - 环境变量 ``REVIEW_STANDARD_LLM_LOG_LEVEL``：如 ``DEBUG``、``INFO``（默认 ``INFO``）。
 - 命令行 ``--log-level``、``--log-file``：覆盖级别、追加写入日志文件。
 
-大模型通过环境变量配置（不设置则可在 --dry-run 下只生成/预览 prompt，不实际请求）：
+大模型通过环境变量配置（不设置则可在 --dry-run 下只生成/预览 prompt，不实际请求）。
+推荐统一使用下列变量（与 ``extract_pdf`` 管线中 VLM 的 ``LLM_*`` 环境兜底一致）：
 
-- ``LLM_API_BASE``：API 根地址，如 ``https://api.openai.com`` 或兼容服务；兼容 ``OPENAI_API_BASE``。
+- ``LLM_API_BASE``：完整 Chat Completions **POST URL**（须以 ``http://`` 或 ``https://`` 开头），例如 ``https://api.openai.com/v1/chat/completions``；兼容 ``OPENAI_API_BASE``（若仍使用旧名，请同样填完整 URL）。
 - ``LLM_API_KEY``：Bearer Token；兼容 ``OPENAI_API_KEY``。
+- ``LLM_API_KEY_BACKUP1``、``LLM_API_KEY_BACKUP2``：可选备用密钥；当主密钥请求返回 **429** / **503**（限流或服务暂不可用）时，
+  同一轮调用内自动换用下一密钥重试，不中断上层轮询流程。
 - ``LLM_MODEL``：模型名；兼容 ``OPENAI_MODEL``。
-- ``LLM_CHAT_PATH``：对话路径，默认 ``/v1/chat/completions``。
 - ``LLM_TIMEOUT_SEC``：秒，默认 ``120``。
 - ``LLM_SYSTEM_PROMPT``：系统提示，未设置则使用本模块内默认的表格提取说明。
 
@@ -35,8 +37,7 @@ Prompt 模板定义位置（换机迁移时优先核对）
     # 路径写在项目根 pipeline.json 的 review_standard_* 键中时可省略文件参数：
     python review_standard_llm_fill.py
 
-    # 或与管线一致显式指定配置文件后仍可用命令行覆盖单一路径：
-    set LLM_API_BASE=https://api.example.com/v1
+    set LLM_API_BASE=https://api.example.com/v1/chat/completions
     set LLM_API_KEY=sk-...
     set LLM_MODEL=gpt-4o-mini
     python review_standard_llm_fill.py --json 评审标准.json --markdown output/markdown/某案_by_page.md -o 评审标准_filled.json
@@ -54,13 +55,13 @@ pipeline.json 中与本节相关的键（``load_config_file`` 会读取；``__``
 环节变量文件（.env）
 ---------------------------------------------------------------------------
 
-启动时会自动加载（需 ``pip install python-dotenv``）：
+本模块在**导入时**即加载（需 ``pip install python-dotenv``），逻辑见 ``step_dotenv.ensure_step_dotenv_loaded``：
 
 1. 项目根 ``.env`` — 不覆盖操作系统里已存在的环境变量；
 2. 项目根 ``环节变量.env`` — 覆盖上一步中已写入的同名键（便于把大模型密钥单独放此文件）；
 3. 当前工作目录下的 ``.env`` / ``环节变量.env`` — 在后加载，后者同名键覆盖前者。
 
-``LLM_API_BASE``、``LLM_MODEL`` 等仍在 ``load_llm_config_from_env()`` 中读取；须在加载 .env **之后**调用，故本脚本在 ``main`` 最先解析完命令行后即加载上述文件。
+``main`` 内会再次调用同一函数（幂等）以便在配置好日志后打印已加载文件列表。
 """
 
 from __future__ import annotations
@@ -76,7 +77,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-# 本模块日志器：环节标签便于换机后对照终端输出
+# 主密钥遇限流（429）或服务暂不可用（503）时，在同一请求内换用下一备用密钥重试
+_LLM_KEY_ROTATION_HTTP_CODES = frozenset({429, 503})
 _LOG = logging.getLogger(__name__)
 
 # 与同目录其它模块一致，支持非传统启动方式
@@ -84,7 +86,11 @@ _repo_root = Path(__file__).resolve().parent
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
-from vlm_client import _extract_message_content  # noqa: E402
+from step_dotenv import ensure_step_dotenv_loaded  # noqa: E402
+
+ensure_step_dotenv_loaded(_repo_root)
+
+from vlm_client import _extract_message_content, is_http_endpoint_url  # noqa: E402
 
 from pipeline_config import load_config_file, resolve_pipeline_config_path  # noqa: E402
 
@@ -112,31 +118,6 @@ def _resolve_output_path(raw: str, workspace: Path) -> Path:
     if p.is_absolute():
         return p.resolve()
     return (workspace / p).resolve()
-
-
-def _load_step_env_files(workspace: Path) -> tuple[list[Path], bool]:
-    """
-    加载环节变量 .env，供 LLM_* / OPENAI_* 等注入 os.environ。
-    返回 (已加载文件的绝对路径列表, 是否因未安装 python-dotenv 而跳过)。
-    """
-    try:
-        from dotenv import load_dotenv
-    except ImportError:
-        return [], True
-
-    loaded: list[Path] = []
-    # (路径, override)：先加载通用 .env，再由环节专用文件与当前目录覆盖
-    steps: list[tuple[Path, bool]] = [
-        (workspace / ".env", False),
-        (workspace / "环节变量.env", True),
-        (Path.cwd() / ".env", True),
-        (Path.cwd() / "环节变量.env", True),
-    ]
-    for path, override in steps:
-        if path.is_file():
-            load_dotenv(path, override=override)
-            loaded.append(path.resolve())
-    return loaded, False
 
 
 def _env_first(*names: str) -> str | None:
@@ -192,14 +173,23 @@ DEFAULT_SYSTEM_PROMPT = (
 
 @dataclass(frozen=True)
 class LlmEnvConfig:
-    """从大模型相关环境变量解析得到的连接参数（仅占位与运行时读取，不在代码里写死密钥）。"""
+    """从大模型相关环境变量解析得到的连接参数（仅占位与运行时读取，不在代码里写死密钥）。
+
+    ``api_base`` 对应 ``LLM_API_BASE``：须为完整 POST endpoint URL（``http(s)://…``），直接用于请求。
+
+    ``api_keys`` 为按顺序尝试的 Bearer 密钥元组（主密钥 + ``LLM_API_KEY_BACKUP*``）；
+    ``api_key`` 属性为首个密钥，便于日志与兼容旧代码。
+    """
 
     api_base: str | None
-    api_key: str | None
+    api_keys: tuple[str, ...]
     model: str | None
-    chat_path: str
     timeout_sec: float
     system_prompt: str
+
+    @property
+    def api_key(self) -> str | None:
+        return self.api_keys[0] if self.api_keys else None
 
 
 def _mask_secret(s: str | None) -> str:
@@ -211,29 +201,48 @@ def _mask_secret(s: str | None) -> str:
     return f"已设置(尾四位 …{s[-4:]})"
 
 
+def _collect_llm_api_key_chain() -> tuple[str, ...]:
+    """
+    组装 API 密钥尝试顺序：主密钥（LLM_API_KEY 或 OPENAI_API_KEY）后接 BACKUP1、BACKUP2。
+    去重：与前面任一密钥相同的备用项会被跳过。
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    primary = _env_first("LLM_API_KEY", "OPENAI_API_KEY")
+    if primary:
+        out.append(primary)
+        seen.add(primary)
+    for name in ("LLM_API_KEY_BACKUP1", "LLM_API_KEY_BACKUP2"):
+        v = _env_first(name)
+        if v and v not in seen:
+            out.append(v)
+            seen.add(v)
+    return tuple(out)
+
+
 def load_llm_config_from_env() -> LlmEnvConfig:
     """从环境变量加载大模型配置（预留接口，便于 CI/本地分别注入）。"""
-    chat_path = _env_first("LLM_CHAT_PATH") or "/v1/chat/completions"
     timeout_raw = _env_first("LLM_TIMEOUT_SEC")
     try:
         timeout_sec = float(timeout_raw) if timeout_raw is not None else 120.0
     except ValueError:
         timeout_sec = 120.0
     sys_msg = _env_first("LLM_SYSTEM_PROMPT") or DEFAULT_SYSTEM_PROMPT
+    key_chain = _collect_llm_api_key_chain()
     cfg = LlmEnvConfig(
         api_base=_env_first("LLM_API_BASE", "OPENAI_API_BASE"),
-        api_key=_env_first("LLM_API_KEY", "OPENAI_API_KEY"),
+        api_keys=key_chain,
         model=_env_first("LLM_MODEL", "OPENAI_MODEL"),
-        chat_path=chat_path if chat_path.startswith("/") else f"/{chat_path}",
         timeout_sec=timeout_sec,
         system_prompt=sys_msg,
     )
     _LOG.info(
-        "[环节:配置] 已读取环境变量：api_base=%s model=%s chat_path=%s timeout=%s api_key=%s system_prompt来源=%s",
+        "[环节:配置] 已读取环境变量：api_base(endpoint)=%s model=%s timeout=%s "
+        "api_key槽位=%s（首个=%s） system_prompt来源=%s",
         cfg.api_base or "(未设置)",
         cfg.model or "(未设置)",
-        cfg.chat_path,
         cfg.timeout_sec,
+        len(cfg.api_keys),
         _mask_secret(cfg.api_key),
         "LLM_SYSTEM_PROMPT" if _env_first("LLM_SYSTEM_PROMPT") else "DEFAULT_SYSTEM_PROMPT",
     )
@@ -263,58 +272,113 @@ def build_table_extraction_user_prompt(
     )
 
 
-def call_openai_compatible_chat(
-    cfg: LlmEnvConfig,
+def _post_chat_completion_once(
+    url: str,
+    model: str,
+    system_prompt: str,
     user_text: str,
+    api_key_token: str | None,
+    timeout_sec: float,
 ) -> str:
-    """OpenAI 兼容 ``/v1/chat/completions`` 文本对话，返回助手正文字符串。"""
-    if not cfg.api_base or not cfg.model:
-        raise RuntimeError("缺少 LLM_API_BASE 或 LLM_MODEL（或兼容环境变量），无法调用大模型。")
-    base = cfg.api_base.rstrip("/")
-    path = cfg.chat_path
-    url = f"{base}{path}"
-    _LOG.info(
-        "[环节:API请求] POST %s model=%s 超时=%ss 用户消息字符数=%s",
-        url,
-        cfg.model,
-        cfg.timeout_sec,
-        len(user_text),
-    )
-    _LOG.debug(
-        "[环节:prompt预览] system 前80字=%s",
-        (cfg.system_prompt[:80] + "…") if len(cfg.system_prompt) > 80 else cfg.system_prompt,
-    )
+    """单次 POST Chat Completions；成功则返回助手正文，否则抛出 HTTPError / URLError。"""
     payload: dict[str, Any] = {
-        "model": cfg.model,
+        "model": model,
         "messages": [
-            {"role": "system", "content": cfg.system_prompt},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_text},
         ],
     }
     headers = {"Content-Type": "application/json; charset=utf-8"}
-    if cfg.api_key:
-        headers["Authorization"] = f"Bearer {cfg.api_key}"
+    if api_key_token:
+        headers["Authorization"] = f"Bearer {api_key_token}"
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=cfg.timeout_sec) as resp:
-            body = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")
-        _LOG.error(
-            "[环节:API错误] HTTP %s URL=%s 响应正文片段=%s",
-            e.code,
-            url,
-            detail[:500] + ("…" if len(detail) > 500 else ""),
-        )
-        raise RuntimeError(f"大模型 HTTP 错误 {e.code}: {detail}") from e
-    except urllib.error.URLError as e:
-        _LOG.error("[环节:API错误] 网络/URL 异常 URL=%s err=%s", url, e)
-        raise RuntimeError(f"大模型连接失败: {e}") from e
+    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        body = resp.read().decode("utf-8")
     parsed = json.loads(body)
-    text = _extract_message_content(parsed).strip()
-    _LOG.info("[环节:API响应] 助手回复字符数=%s", len(text))
-    return text
+    return _extract_message_content(parsed).strip()
+
+
+def call_openai_compatible_chat(
+    cfg: LlmEnvConfig,
+    user_text: str,
+) -> str:
+    """OpenAI 兼容 Chat Completions 文本对话，返回助手正文字符串。
+
+    若配置了多个 ``api_keys``，遇 **429** / **503** 时在同一调用内依次换密钥重试，不中断上层流程。
+    """
+    if not cfg.api_base or not cfg.model:
+        raise RuntimeError("缺少 LLM_API_BASE 或 LLM_MODEL（或兼容环境变量），无法调用大模型。")
+    url = cfg.api_base.strip()
+    if not is_http_endpoint_url(url):
+        raise RuntimeError(
+            "LLM_API_BASE 须为以 http:// 或 https:// 开头的完整 Chat Completions POST URL。"
+        )
+    key_slots: list[str | None] = list(cfg.api_keys) if cfg.api_keys else [None]
+    if len(key_slots) > 1:
+        _LOG.info(
+            "[环节:API请求] POST %s model=%s 超时=%ss 用户消息字符数=%s 密钥轮询槽位=%s",
+            url,
+            cfg.model,
+            cfg.timeout_sec,
+            len(user_text),
+            len(key_slots),
+        )
+    else:
+        _LOG.info(
+            "[环节:API请求] POST %s model=%s 超时=%ss 用户消息字符数=%s",
+            url,
+            cfg.model,
+            cfg.timeout_sec,
+            len(user_text),
+        )
+    _LOG.debug(
+        "[环节:prompt预览] system 前80字=%s",
+        (cfg.system_prompt[:80] + "…") if len(cfg.system_prompt) > 80 else cfg.system_prompt,
+    )
+
+    for idx, token in enumerate(key_slots):
+        try:
+            text = _post_chat_completion_once(
+                url,
+                cfg.model,
+                cfg.system_prompt,
+                user_text,
+                token,
+                cfg.timeout_sec,
+            )
+            if idx > 0:
+                _LOG.info(
+                    "[环节:API响应] 使用第 %s/%s 个密钥成功，助手回复字符数=%s",
+                    idx + 1,
+                    len(key_slots),
+                    len(text),
+                )
+            else:
+                _LOG.info("[环节:API响应] 助手回复字符数=%s", len(text))
+            return text
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")
+            if e.code in _LLM_KEY_ROTATION_HTTP_CODES and idx < len(key_slots) - 1:
+                _LOG.warning(
+                    "[环节:密钥轮换] HTTP %s（疑似限流或服务暂不可用），换用下一密钥 %s/%s URL=%s 响应片段=%s",
+                    e.code,
+                    idx + 2,
+                    len(key_slots),
+                    url,
+                    detail[:300] + ("…" if len(detail) > 300 else ""),
+                )
+                continue
+            _LOG.error(
+                "[环节:API错误] HTTP %s URL=%s 响应正文片段=%s",
+                e.code,
+                url,
+                detail[:500] + ("…" if len(detail) > 500 else ""),
+            )
+            raise RuntimeError(f"大模型 HTTP 错误 {e.code}: {detail}") from e
+        except urllib.error.URLError as e:
+            _LOG.error("[环节:API错误] 网络/URL 异常 URL=%s err=%s", url, e)
+            raise RuntimeError(f"大模型连接失败: {e}") from e
 
 
 RESULT_FIELD = "大模型返回结果"
@@ -443,7 +507,7 @@ def _apply_pipeline_paths_to_args(
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     workspace = _repo_root
-    env_loaded, dotenv_missing = _load_step_env_files(workspace)
+    env_loaded, dotenv_missing = ensure_step_dotenv_loaded(workspace)
     configure_logging(level=args.log_level, log_file=args.log_file)
     if dotenv_missing:
         _LOG.warning(
@@ -542,12 +606,16 @@ def main(argv: list[str] | None = None) -> int:
         stem = args.json_path.stem
         out_path = args.json_path.with_name(f"{stem}_llm_filled.json")
 
-    if not args.dry_run and (not cfg.api_base or not cfg.model):
+    if not args.dry_run and (
+        not cfg.api_base
+        or not cfg.model
+        or not is_http_endpoint_url((cfg.api_base or "").strip())
+    ):
         _LOG.warning(
-            "[环节:配置] 未设置 LLM_API_BASE / LLM_MODEL，自动按 dry-run 处理（无真实模型调用）"
+            "[环节:配置] 未设置有效的 LLM_API_BASE（须为完整 http(s) URL）或 LLM_MODEL，自动按 dry-run 处理（无真实模型调用）"
         )
         print(
-            "警告：未配置 LLM_API_BASE / LLM_MODEL，将仅能做 dry-run。"
+            "警告：未配置完整的大模型 POST URL（LLM_API_BASE）或模型名，将仅能做 dry-run。"
             "已自动启用 --dry-run 行为（不写真实模型输出）。",
             file=sys.stderr,
         )

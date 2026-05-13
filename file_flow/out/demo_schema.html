@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>案卷评审结果浏览</title>
+  <style>
+    body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; margin: 1rem 1.5rem; background: #f6f7f9; color: #1a1a1a; }
+    h1 { font-size: 1.25rem; border-bottom: 2px solid #2563eb; padding-bottom: 0.35rem; }
+    h2 { font-size: 1.05rem; margin-top: 1.25rem; }
+    h3 { font-size: 1.1rem; margin: 0 0 0.75rem 0; color: #1e3a8a; }
+    h4 { margin: 0; font-size: 1rem; }
+    h5 { margin: 0 0 0.35rem 0; font-size: 0.8rem; color: #64748b; letter-spacing: 0.02em; }
+    section.doc { background: #fff; border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.25rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    section.meta { background: #eff6ff; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem; }
+    section.meta table { border-collapse: collapse; width: 100%; }
+    section.meta th { text-align: left; padding: 0.25rem 0.5rem; width: 8rem; color: #334155; }
+    section.meta td { padding: 0.25rem; }
+    .badge { font-size: 0.75rem; background: #e0e7ff; color: #3730a3; padding: 0.15rem 0.5rem; border-radius: 6px; margin-left: 0.35rem; }
+    article.field { border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 0.75rem; background: #fafafa; }
+    article.field:last-child { margin-bottom: 0; }
+    .field-head { margin-bottom: 0.65rem; }
+    .field-head h4 { display: inline-block; vertical-align: middle; }
+    /* 左右分栏：顶部对齐，随页面整体滚动（不设栏内 max-height 截断） */
+    .field-split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 1rem 1.25rem;
+      align-items: start;
+    }
+    @media (max-width: 900px) {
+      .field-split { grid-template-columns: 1fr; }
+    }
+    .col-source, .col-qa { min-width: 0; }
+    .col-qa { display: flex; flex-direction: column; gap: 0.75rem; }
+    .qa-block { min-width: 0; }
+    article.field pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0;
+      font-size: 0.88rem;
+      line-height: 1.5;
+      border-radius: 6px;
+      padding: 0.55rem 0.7rem;
+      overflow: visible;
+    }
+    .pre-source {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+    }
+    .pre-question {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+    }
+    .pre-answer {
+      background: #f0fdf4;
+      border: 1px solid #86efac;
+    }
+    p.hw { margin: 0.35rem 0 0 0; font-size: 0.85rem; color: #92400e; }
+  </style>
+</head>
+<body>
+  <h1>案卷评审结果浏览</h1>
+<section class='doc'><h3>立案登记表 <span class='badge'>必须</span></h3><div class='fields'><article class='field'><header class='field-head'><h4>案件来源</h4><p class='hw'><strong>手写体</strong>：否</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>1.是否根据实际情况勾选“行政检查中发现的”、“个人法人及其他组织举报核实的”、“上级机关交办的”、“下级机关报请查处的”“有关部门移送”、“其他途径发现的”；
+2.上级机关、下级机关、有关部门名称是否完整准确；
+3.其他途径发现的，是否明确方式、来源等，是否空白。</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article><article class='field'><header class='field-head'><h4>案由</h4><p class='hw'><strong>手写体</strong>：否</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>1.“案由”是否表述为：当事人姓名（名称）＋涉嫌+ 违法行为＋案。违法行为需依照法律法规的规范用语确定，不可使用非规范用语或者自行缩略。</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article><article class='field'><header class='field-head'><h4>受案时间</h4><p class='hw'><strong>手写体</strong>：否</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>1.日期时间单位是否精确到“年”“月”“日”。
+2.“受案时间”是否为发现违法行为线索或者收到投诉、举报、移送材料后，进行登记的时间。</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article><article class='field'><header class='field-head'><h4>当事人基本信息</h4><p class='hw'><strong>手写体</strong>：否</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>当事人基本情况记载是否缺项或记载不清楚不准确，比如个体工商户应属于自然人而非法人</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article><article class='field'><header class='field-head'><h4>案件基本情况</h4><p class='hw'><strong>手写体</strong>：否</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>“案件基本情况”是否规范完整，包括案件来源和初步查明的事实（案发时间、地点、当事人、行为、事件经过、后果和现状等）</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article><article class='field'><header class='field-head'><h4>立案依据</h4><p class='hw'><strong>手写体</strong>：否</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>“立案依据”是否填写违法行为违反的法律条、款、项、目</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article><article class='field'><header class='field-head'><h4>经办机构负责人意见</h4><p class='hw'><strong>手写体</strong>：是</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>1.经办机构负责人意见是否填写“建议立案”、“不建议立案”“建议不予立案”“不建议不予立案”；
+2.是否签署姓名和日期。</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article><article class='field'><header class='field-head'><h4>负责人审批意见</h4><p class='hw'><strong>手写体</strong>：是</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>1.负责人审批意见是否由执法部门负责人根据案情填写“同意立案”；不同意立案的，是否填写“不予立案”；或者是否填写“同意不予立案”、“不同意不予立案，建议立案调查”。
+2.指定至少两名承办人员。
+3.是否签署姓名和日期。</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article><article class='field'><header class='field-head'><h4>对符合立案条件的，应当及时立案</h4><p class='hw'><strong>手写体</strong>：是</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>比对经办人、负责人审批时间，判断是否做到及时立案</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article><article class='field'><header class='field-head'><h4>立案时间</h4><p class='hw'><strong>手写体</strong>：是</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>立案时间减第一次事后告知时间一般不大于7个工作日。</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article></div></section>
+<section class='doc'><h3>现场笔录 <span class='badge'>非必须</span></h3><div class='fields'><article class='field'><header class='field-head'><h4>现场情况</h4><p class='hw'><strong>手写体</strong>：否</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>1.    行政执法人员是否按规定向当事人出示行政执法证件、表明身份；
+2.    回避、陈述、申辩等依法享有的权利。
+3.    证据的固定收集情况；
+4.    实施行政强制措施情况；</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article><article class='field'><header class='field-head'><h4>现场人员签名</h4><p class='hw'><strong>手写体</strong>：是</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>1.是否由当事人逐页签名、手印及日期；
+2.当事人拒绝签字的，是否由执法人员在笔录上予以注明。是否邀请在场的见证人签字；
+标注“笔录无误”、手印</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article><article class='field'><header class='field-head'><h4>执法人员签字</h4><p class='hw'><strong>手写体</strong>：是</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>是否在笔录上签名，2人
+写明日期</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article></div></section>
+<section class='doc'><h3>询问笔录 <span class='badge'>必须</span></h3><div class='fields'><article class='field'><header class='field-head'><h4>询问人员</h4><p class='hw'><strong>手写体</strong>：否</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>询问时是否有两名以上执法人员在场，一份笔录只能询问一个人， 同一时间相同执法人员只能询问一个人。</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article><article class='field'><header class='field-head'><h4>询问时间</h4><p class='hw'><strong>手写体</strong>：否</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>询问时间是否具体明确，“时间”是否具体到分，是否注明“第×次询问”</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article><article class='field'><header class='field-head'><h4>询问地点</h4><p class='hw'><strong>手写体</strong>：否</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>询问地点是否具体明确，“地点”是否详细地点。</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article><article class='field'><header class='field-head'><h4>申请回避</h4><p class='hw'><strong>手写体</strong>：否</p></header><div class='field-split'><div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'></pre></div><div class='col-qa'><div class='qa-block'><h5>问题</h5><pre class='pre-question'>是否明确告知当事人申请回避的权利</pre></div><div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>（未填答）</pre></div></div></div></article></div></section>
+</body>
+</html>

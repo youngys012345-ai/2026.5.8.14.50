@@ -10,9 +10,10 @@
 
 环境变量（与上一环节共用连接参数）：
 
-- ``LLM_API_BASE`` / ``OPENAI_API_BASE``、``LLM_MODEL``、``LLM_API_KEY`` 等。
+- ``LLM_API_BASE``（完整 ``https://…`` Chat Completions POST URL）、``LLM_MODEL``、``LLM_API_KEY``（与 ``review_standard_llm_fill.load_llm_config_from_env`` 相同）；可选 ``LLM_API_KEY_BACKUP1``、``LLM_API_KEY_BACKUP2`` 在主密钥 429/503 时自动轮换（见 ``call_openai_compatible_chat``）。
 - ``REVIEW_FIELD_QA_SYSTEM_PROMPT``：本环节专用系统提示；未设置则使用本模块默认评审作答提示。
 - 日志级别可用 ``REVIEW_STANDARD_LLM_LOG_LEVEL``（与 fill 脚本共用 configure_logging）。
+- 非 dry-run 时，首次调用大模型会在日志中输出**首条** system 提示、user 全文（过长则截断）及**首条**助手回复（过长则截断）。
 
 用法::
 
@@ -37,6 +38,10 @@ _workspace = Path(__file__).resolve().parent
 if str(_workspace) not in sys.path:
     sys.path.insert(0, str(_workspace))
 
+from step_dotenv import ensure_step_dotenv_loaded  # noqa: E402
+
+ensure_step_dotenv_loaded(_workspace)
+
 from pipeline_config import load_config_file, resolve_pipeline_config_path  # noqa: E402
 
 from review_standard_llm_fill import (  # noqa: E402
@@ -47,6 +52,7 @@ from review_standard_llm_fill import (  # noqa: E402
     iter_top_level_sections,
     load_llm_config_from_env,
 )
+from vlm_client import is_http_endpoint_url  # noqa: E402
 
 
 def _resolve_input_path(raw: str, workspace: Path) -> Path:
@@ -74,38 +80,22 @@ def _resolve_output_path(raw: str, workspace: Path) -> Path:
     return (workspace / p).resolve()
 
 
-def _load_step_env_files(workspace: Path) -> tuple[list[Path], bool]:
-    """
-    加载环节变量 .env（与 review_standard_llm_fill 逻辑一致）。
-    在本模块内重复实现，避免依赖对方私有符号导致版本不一致时 ImportError。
-    """
-    try:
-        from dotenv import load_dotenv
-    except ImportError:
-        return [], True
-
-    loaded: list[Path] = []
-    steps: list[tuple[Path, bool]] = [
-        (workspace / ".env", False),
-        (workspace / "环节变量.env", True),
-        (Path.cwd() / ".env", True),
-        (Path.cwd() / "环节变量.env", True),
-    ]
-    for path, override in steps:
-        if path.is_file():
-            load_dotenv(path, override=override)
-            loaded.append(path.resolve())
-    return loaded, False
-
-
 CONTENT_FIELD = "内容"
 HANDWRITING_FIELD = "是否需要识别手写体"
 
+# 首条 LLM 请求/响应写入日志时的单段最大字符数（避免单条日志过大）
+_FIRST_LLM_LOG_MAX_CHARS = 20000
+
+
+def _preview_for_log(text: str, max_chars: int = _FIRST_LLM_LOG_MAX_CHARS) -> str:
+    """用于日志的正文预览；超长时截断并注明总长度。"""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"\n…（共 {len(text)} 字符，已按 max={max_chars} 截断）"
+
 # 与 REVIEW_FIELD_QA_SYSTEM_PROMPT 二选一（变量优先于本常量）
 DEFAULT_FIELD_QA_SYSTEM_PROMPT = (
-    "你是行政执法案卷评审助手。用户会提供某一类文书的大模型抽取结果作为唯一上下文，"
-    "以及针对具体栏目的评审要求。请严格依据上下文作答：逐条对照要求说明是否符合、依据何在；"
-    "若上下文中没有相关信息，须明确说明「无法判断」并简述原因。使用简体中文，条理清晰。"
+    "你是行政执法案卷评审助手，以及针对具体栏目的评审要求。请严格依据上下文作答：逐条对照要求说明是否符合、依据何在；"
 )
 
 
@@ -153,9 +143,8 @@ def build_field_qa_user_prompt(
     parts.append("【评审要求】")
     parts.append(req_text)
     parts.append(
-        "请仅依据上述「大模型抽取结果」中的材料，逐条对照评审要求作答："
-        "说明是否符合、依据何在；不得臆测材料中不存在的内容。"
-        "若不足以判断，须写明「无法判断」并简述原因。"
+        "请仅依据上述材料，逐条对照评审要求判断是否符合要求。请先给出结论，然后再给出简要判断依据。如果信息不全或依据不足，也认为不符合要求"
+        "不得臆测材料中不存在的内容。"
     )
     return "\n\n".join(parts)
 
@@ -180,6 +169,10 @@ def fill_field_answers(
 
     done = 0
     _LOG.info("[环节:栏目标注] 预计调用次数=%s（每个子字段一次）", total_calls)
+
+    # 仅首条真实请求打印 system + user；仅首次成功返回打印助手正文（便于对照 API 行为）
+    first_llm_request_logged = False
+    first_llm_response_logged = False
 
     for section_title, block in iter_top_level_sections(out):
         fields_obj = block.get("字段")
@@ -219,7 +212,26 @@ def fill_field_answers(
             if dry_run:
                 field_obj[CONTENT_FIELD] = "[dry-run 未调用大模型]"
                 continue
+            if not first_llm_request_logged:
+                _LOG.info(
+                    "[环节:首条LLM请求] system 提示（%s 字符）:\n%s",
+                    len(cfg.system_prompt),
+                    _preview_for_log(cfg.system_prompt),
+                )
+                _LOG.info(
+                    "[环节:首条LLM请求] user 消息（%s 字符）:\n%s",
+                    len(user_prompt),
+                    _preview_for_log(user_prompt),
+                )
+                first_llm_request_logged = True
             text = call_openai_compatible_chat(cfg, user_prompt)
+            if not first_llm_response_logged:
+                _LOG.info(
+                    "[环节:首条LLM响应] 助手回复（%s 字符）:\n%s",
+                    len(text),
+                    _preview_for_log(text),
+                )
+                first_llm_response_logged = True
             field_obj[CONTENT_FIELD] = text
 
     return out
@@ -290,7 +302,7 @@ def _apply_pipeline_field_qa_paths(
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     workspace = _workspace
-    env_loaded, dotenv_missing = _load_step_env_files(workspace)
+    env_loaded, dotenv_missing = ensure_step_dotenv_loaded(workspace)
     configure_logging(level=args.log_level, log_file=args.log_file)
     if dotenv_missing:
         _LOG.warning(
@@ -341,10 +353,14 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(1)
 
     dry_run = args.dry_run
-    if not dry_run and (not cfg_qa.api_base or not cfg_qa.model):
-        _LOG.warning("[环节:配置] 缺少 LLM_API_BASE / LLM_MODEL，自动 dry-run")
+    if not dry_run and (
+        not cfg_qa.api_base
+        or not cfg_qa.model
+        or not is_http_endpoint_url((cfg_qa.api_base or "").strip())
+    ):
+        _LOG.warning("[环节:配置] 缺少有效的 LLM_API_BASE（须为完整 https URL）或 LLM_MODEL，自动 dry-run")
         print(
-            "警告: 未配置大模型地址或模型名，仅执行 dry-run。",
+            "警告: 未配置完整的大模型 endpoint URL 或模型名，仅执行 dry-run。",
             file=sys.stderr,
         )
         dry_run = True

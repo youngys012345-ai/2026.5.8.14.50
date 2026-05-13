@@ -35,6 +35,35 @@ def _extract_message_content(resp: dict[str, Any]) -> str:
     return ""
 
 
+def is_http_endpoint_url(value: str | None) -> bool:
+    """判断是否为 ``http(s)://`` 开头的完整 URL（用于识别「仅填 endpoint、不填路径」的配置）。"""
+    if value is None:
+        return False
+    t = str(value).strip().lower()
+    return t.startswith("http://") or t.startswith("https://")
+
+
+def join_openai_compatible_endpoint_url(api_base: str, chat_path: str | None = None) -> str:
+    """
+    解析 OpenAI 兼容 Chat 接口的最终 POST URL。
+
+    - **未传路径或路径为空**：假定 ``api_base`` 已是完整 endpoint（如 ``https://host/v1/chat/completions``），
+      仅做首尾空白 ``strip`` 后返回（不再拼接默认路径）。
+    - **路径非空**：与 ``api_base`` 按字面规则拼接（兼容 ``pipeline.json`` 中 ``vlm_api_base`` + ``vlm_chat_path`` 拆分写法）。
+    - 路径若以 ``http://`` / ``https://`` 开头，视为完整 URL，直接返回该路径字符串。
+    - 相对路径不以 ``/`` 开头时自动补 ``/``，避免出现 ``https://hostv1/...`` 式粘连。
+    """
+    if chat_path is None or str(chat_path).strip() == "":
+        return str(api_base).strip()
+    base = str(api_base).strip().rstrip("/")
+    p = str(chat_path).strip()
+    if p.startswith(("http://", "https://")):
+        return p
+    if not p.startswith("/"):
+        p = "/" + p
+    return f"{base}{p}"
+
+
 def parse_vlm_classification_text(text: str) -> tuple[str, float]:
     raw = text.strip()
     m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw, flags=re.I)
@@ -90,10 +119,9 @@ def build_openai_compatible_vlm_detector(
     timeout_sec: float = 120.0,
     system_prompt: str | None = None,
     user_prompt: str | None = None,
-    chat_completions_path: str = "/v1/chat/completions",
+    chat_completions_path: str | None = None,
 ) -> Callable[[Path], tuple[str, float]]:
-    base = api_base.rstrip("/")
-    path = chat_completions_path if chat_completions_path.startswith("/") else f"/{chat_completions_path}"
+    endpoint = join_openai_compatible_endpoint_url(api_base, chat_completions_path)
     sys_msg = (
         system_prompt.strip()
         if isinstance(system_prompt, str) and system_prompt.strip()
@@ -126,7 +154,7 @@ def build_openai_compatible_vlm_detector(
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         req = urllib.request.Request(
-            f"{base}{path}",
+            endpoint,
             data=json.dumps(payload).encode("utf-8"),
             headers=headers,
             method="POST",
@@ -153,10 +181,9 @@ def build_openai_compatible_vlm_page_transcriber(
     timeout_sec: float = 180.0,
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
-    chat_completions_path: str = "/v1/chat/completions",
+    chat_completions_path: str | None = None,
 ) -> Callable[[Path, int], str]:
-    base = api_base.rstrip("/")
-    path = chat_completions_path if chat_completions_path.startswith("/") else f"/{chat_completions_path}"
+    endpoint = join_openai_compatible_endpoint_url(api_base, chat_completions_path)
     sys_msg = (
         system_prompt.strip()
         if isinstance(system_prompt, str) and system_prompt.strip()
@@ -187,7 +214,7 @@ def build_openai_compatible_vlm_page_transcriber(
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         req = urllib.request.Request(
-            f"{base}{path}",
+            endpoint,
             data=json.dumps(payload).encode("utf-8"),
             headers=headers,
             method="POST",

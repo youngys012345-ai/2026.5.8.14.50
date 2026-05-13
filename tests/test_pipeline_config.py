@@ -55,6 +55,31 @@ def test_merge_defaults_order() -> None:
     assert m == {"a": 2, "b": 3}
 
 
+def test_defaults_from_environment_llm_fills_vlm_when_opendataloader_unset(monkeypatch) -> None:
+    """未配置 OPENDATALOADER_VLM_* 时，用 LLM_* 填充 VLM（endpoint 仅用 LLM_API_BASE）。"""
+    monkeypatch.delenv("OPENDATALOADER_VLM_API_BASE", raising=False)
+    monkeypatch.delenv("OPENDATALOADER_VLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENDATALOADER_VLM_MODEL", raising=False)
+    monkeypatch.delenv("OPENDATALOADER_VLM_CHAT_PATH", raising=False)
+    monkeypatch.delenv("LLM_CHAT_PATH", raising=False)
+    monkeypatch.setenv("LLM_API_BASE", "https://api.example/v1/chat/completions")
+    monkeypatch.setenv("LLM_API_KEY", "sk-x")
+    monkeypatch.setenv("LLM_MODEL", "gpt-test")
+
+    data = defaults_from_environment()
+    assert data["vlm_api_base"] == "https://api.example/v1/chat/completions"
+    assert data["vlm_api_key"] == "sk-x"
+    assert data["vlm_model"] == "gpt-test"
+    assert "vlm_chat_path" not in data
+
+
+def test_defaults_from_environment_opendataloader_vlm_overrides_llm(monkeypatch) -> None:
+    monkeypatch.setenv("OPENDATALOADER_VLM_API_BASE", "https://vlm-only")
+    monkeypatch.setenv("LLM_API_BASE", "https://from-llm")
+    data = defaults_from_environment()
+    assert data["vlm_api_base"] == "https://vlm-only"
+
+
 def test_defaults_from_environment_with_mineru_keys(monkeypatch) -> None:
     monkeypatch.setenv("MINERU_BACKEND", "pipeline")
     monkeypatch.setenv("MINERU_API_URL", "http://127.0.0.1:8000")

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from vlm_client import (
     _extract_message_content,
     build_openai_compatible_vlm_detector,
+    join_openai_compatible_endpoint_url,
     parse_vlm_classification_text,
 )
 
@@ -49,6 +50,29 @@ def test_extract_message_content_multipart_text() -> None:
     assert '"confidence":0.5}' in merged
 
 
+def test_join_openai_compatible_endpoint_url_base_and_path() -> None:
+    assert (
+        join_openai_compatible_endpoint_url("https://api.openai.com/v1", "/chat/completions")
+        == "https://api.openai.com/v1/chat/completions"
+    )
+    assert (
+        join_openai_compatible_endpoint_url("https://host/", "v1/chat/completions")
+        == "https://host/v1/chat/completions"
+    )
+
+
+def test_join_openai_compatible_endpoint_url_full_url_in_path() -> None:
+    u = "https://other/v1/chat/completions"
+    assert join_openai_compatible_endpoint_url("https://ignored", u) == u
+
+
+def test_join_openai_compatible_endpoint_url_only_base_no_path() -> None:
+    """路径为空时 ``api_base`` 视为完整 POST URL。"""
+    u = "https://api.example/v1/chat/completions"
+    assert join_openai_compatible_endpoint_url(u, None) == u
+    assert join_openai_compatible_endpoint_url(u, "") == u
+
+
 def test_build_detector_calls_api(tmp_path: Path) -> None:
     img = tmp_path / "x.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n")  # 最小 PNG 文件头片段即可用于 mime
@@ -64,7 +88,7 @@ def test_build_detector_calls_api(tmp_path: Path) -> None:
 
     with patch("vlm_client.urllib.request.urlopen", return_value=mock_cm) as mock_urlopen:
         detect = build_openai_compatible_vlm_detector(
-            api_base="https://example.com",
+            api_base="https://example.com/v1/chat/completions",
             api_key="sk-test",
             model="gpt-4o-mini",
             timeout_sec=30.0,

@@ -5,6 +5,10 @@
 
 合并优先级（后者覆盖前者）：环境变量 → pipeline.json → 命令行参数。
 业务默认值应写在项目根的 pipeline.json（或 --config 指定的文件）中，不在 Python 代码里写死。
+
+未设置 ``OPENDATALOADER_VLM_*`` 时，VLM 的 ``vlm_api_base`` 可从 ``LLM_API_BASE`` 读取（须为完整
+``http(s)`` Chat Completions POST URL，与评审脚本一致）；``LLM_MODEL``、``LLM_API_KEY`` 分别映射到
+``vlm_model``、``vlm_api_key``（便于一份 .env 共用）。
 """
 
 from __future__ import annotations
@@ -170,6 +174,19 @@ def defaults_from_environment() -> dict[str, Any]:
     vup = _env_str("OPENDATALOADER_VLM_USER_PROMPT", None)
     if vup is not None:
         d["vlm_user_prompt"] = vup
+    # 与评审 LLM 环节共用 LLM_*（仅当未配置 OPENDATALOADER_VLM_* 对应项时）
+    if "vlm_api_base" not in d:
+        llm_b = _env_str("LLM_API_BASE", None)
+        if llm_b is not None:
+            d["vlm_api_base"] = llm_b
+    if "vlm_api_key" not in d:
+        llm_k = _env_str("LLM_API_KEY", None)
+        if llm_k is not None:
+            d["vlm_api_key"] = llm_k
+    if "vlm_model" not in d:
+        llm_m = _env_str("LLM_MODEL", None)
+        if llm_m is not None:
+            d["vlm_model"] = llm_m
     # 输出与遍历
     od = _env_str("OPENDATALOADER_OUTPUT_DIR", None)
     if od is not None:

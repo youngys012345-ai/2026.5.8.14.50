@@ -49,7 +49,7 @@
 
   "hybrid_ca_bundle": null,
 
-  "__视觉与VLM": "visual_tagging=vlm 或 vlm_fallback 非 off 时须填写 vlm_api_base、vlm_model、vlm_timeout_sec、vlm_chat_path；vlm_fallback 非 off 时还须 vlm_page_transcribe_min_timeout_sec。",
+  "__视觉与VLM": "visual_tagging=vlm 或 vlm_fallback 非 off 时须 vlm_api_base（可为完整 https Chat URL）、vlm_model、vlm_timeout_sec；若 vlm_api_base 仅为服务根（非 http(s) 全链）则须另填 vlm_chat_path（如 /v1/chat/completions）。vlm_fallback 非 off 时还须 vlm_page_transcribe_min_timeout_sec。",
 
   "visual_tagging": "off",
   "visual_min_score": 0.5,
