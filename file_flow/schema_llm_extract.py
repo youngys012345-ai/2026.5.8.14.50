@@ -4,11 +4,17 @@
 按 **document_types** 结构（与 ``out/schema_example.json`` 一致）调用大模型，
 从 PDF 全文中为各 ``fields`` 项摘录匹配内容，写入字段对象下的 ``content``。
 
+**本环节只做「从全文按 schema 字段说明做信息摘录」**，不读取 ``standards.json``、不在 user 消息中拼接
+任何「评审问题 / standard」；评审逻辑在 **第二步** ``llm_fill`` 与 **第三步** ``standards_llm_review``。
+
 1. **公共上下文**：每项文书将 ``document_name`` 与文书级 ``description`` 拼成固定前缀。
 2. **逐字段一次调用**：每条字段仅依据 **字段名称（field_name）** 与 **字段说明（description）** 作为抽取目标，
    与全文一并交给模型；**不**使用 ``case_sources`` / ``related_review_items`` 等扩展分支。
 3. **写回**：将模型返回正文经 ``parse_llm_plain_excerpt``（仅首尾空白 trim，**不**去除 Markdown 代码围栏）
    写入该字段 ``content``。
+
+大模型 **system** 使用 ``load_schema_extract_system_prompt``（或环境变量 ``FILE_FLOW_SCHEMA_EXTRACT_SYSTEM_PROMPT``），
+与 ``llm_fill`` 使用的 ``FILE_FLOW_SYSTEM_PROMPT`` / ``file_flow_llm_system_prompt`` 相互独立。
 
 根对象**必须**包含非空的 ``document_types`` 数组；否则 ``pdf_prepare`` 会在加载阶段报错退出。
 """
@@ -184,6 +190,9 @@ def enrich_work_json_with_llm_schema_extract(
 ) -> dict[str, Any]:
     """
     深拷贝 ``work``，按「公共上下文 + 字段名称 + 字段说明」每字段调用大模型一次，将摘录写入 ``content``。
+
+    ``base_cfg`` 仅提供连接参数（api_base、model、keys、timeout）；**无论传入的 system_prompt 为何**，
+    实际请求前都会替换为 ``load_schema_extract_system_prompt(merged)``，避免误用 ``llm_fill`` 的评审向 system。
     """
     out: dict[str, Any] = json.loads(json.dumps(work, ensure_ascii=False))
     extract_sys = load_schema_extract_system_prompt(merged)

@@ -32,10 +32,10 @@ _FILE_FLOW_DIR = Path(__file__).resolve().parent
 
 from .llm_openai import (  # noqa: E402
     LlmEnvConfig,
+    build_llm_env_config,
     call_openai_compatible_chat,
     configure_logging,
     is_http_endpoint_url,
-    load_llm_config_for_file_flow,
 )
 from .naming import (
     review_json_filename_for_base,
@@ -329,7 +329,7 @@ def run_standards_review(
         return 1
     standards_rows = [x for x in standards_data if isinstance(x, dict)]
 
-    base_cfg = load_llm_config_for_file_flow(merged)
+    base_cfg = build_llm_env_config(merged, load_standards_review_system_prompt(merged))
     dry = dry_run
     if not dry and (
         not base_cfg.api_base

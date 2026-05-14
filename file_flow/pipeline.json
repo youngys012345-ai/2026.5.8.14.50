@@ -5,7 +5,7 @@
 
   "__环境变量": "加载顺序：file_flow/.env（不覆盖系统环境）→ 仓库根/.env（仅补缺）→ file_flow/环节变量.env（覆盖前两步同名键）。可将 LLM_API_BASE、LLM_API_KEY、LLM_MODEL 等写在仓库根 .env 或本目录 .env。依赖包见 requirements.txt 中的 python-dotenv。",
 
-  "__步骤编排": "file_flow_steps 为子步骤名列表。未配置 file_flow_auto_batch 时编排默认为 true。llm_fill：按文书→字段遍历顺序与 standards.json 顶层数组按下标对齐，取每条 standard 作为【评审问题】。",
+  "__步骤编排": "file_flow_steps 顺序默认为：① pdf_prepare：PDF→全文文件+work 骨架；可选 schema_llm_extract 仅按字段说明从全文写 content（不读 standards）。② llm_fill：在 content 基础上拼 standards 同下标 standard 作评审问题，写 answer。③ standards_review：按 standards 清单逐项+案卷摘录写 standards_review。④ render_html。",
 
   "__产出命名": "file_flow_suffix_* 控制各阶段 JSON 文件名中 stem 与 .json 之间的后缀（须为 _字母数字 形式），须与批量 glob 一致。",
 

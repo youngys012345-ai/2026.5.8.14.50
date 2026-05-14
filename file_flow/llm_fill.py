@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-文件模式第二步：读取工作 JSON（``document_types`` / ``fields`` 结构，与 ``schema_example.json`` 一致），
-按固定规则拼接用户消息并调用大模型，将回复写入字段对象下的 ``answer``。
+文件模式第二步（**非** schema 全文摘录）：读取工作 JSON（``document_types`` / ``fields`` 结构），
+在 **各字段已有 ``content``（上一步摘录或人工填写）** 的前提下，按固定规则拼接用户消息并调用大模型，
+将回复写入字段对象下的 ``answer``。
+
+**与第一步的分工**：``schema_llm_extract`` / ``pdf_prepare --llm-extract`` 只负责从 PDF 全文按字段说明写入 ``content``；
+本模块 **才** 引入 ``standards.json``：与 ``standards.json`` 按下标对齐，把每条 ``standard`` 作为【评审问题】。
 
 **拼接规则**（与 ``standards.json`` 按下标对齐）：
 

@@ -97,7 +97,41 @@ def test_enrich_one_call_per_field_dry_run() -> None:
     assert "dry-run" in c
 
 
-def test_enrich_two_fields_two_calls(monkeypatch) -> None:
+def test_enrich_replaces_cfg_system_with_schema_extract_prompt(monkeypatch) -> None:
+    """即使传入 llm_fill 风格的评审 system，实际请求也必须换成 schema 摘录专用 system。"""
+    captured: dict[str, str] = {}
+
+    def fake_chat(cfg, user_text: str) -> str:
+        captured["system"] = cfg.system_prompt
+        captured["user_has_review_block"] = "【评审问题】" in user_text
+        return "摘录"
+
+    monkeypatch.setattr(
+        "file_flow.schema_llm_extract.call_openai_compatible_chat",
+        fake_chat,
+    )
+    work = {
+        "document_types": [
+            {
+                "document_name": "文书",
+                "description": "",
+                "fields": [{"field_name": "栏A", "description": "da"}],
+            }
+        ]
+    }
+    cfg = LlmEnvConfig(
+        api_base="http://localhost/v1/chat/completions",
+        api_keys=("k",),
+        model="m",
+        timeout_sec=1.0,
+        system_prompt="你是评审助手（错误地传入的 system，应被替换）",
+    )
+    enrich_work_json_with_llm_schema_extract(work, "全文X", cfg, None, dry_run=False)
+    assert "信息抽取" in captured["system"] or "摘录" in captured["system"]
+    assert "错误的评审" not in captured["system"]
+    assert captured["user_has_review_block"] is False
+
+
     calls: list[str] = []
 
     def fake_chat(_cfg, user_text: str) -> str:

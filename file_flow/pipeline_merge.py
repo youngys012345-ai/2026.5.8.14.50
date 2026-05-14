@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-file_flow 管线编排：读取 ``file_flow/pipeline.json``（或 ``--config`` 指定路径）中的允许键，并按配置顺序以 **Python 调用** 各步骤，
-无需在终端分别敲 ``pdf_prepare`` / ``llm_fill`` / ``render_html``。
+file_flow 管线编排：读取 ``file_flow/pipeline.json``（或 ``--config``）中的允许键，并按配置顺序以 **Python 调用**各步骤。
 
-**推荐业务顺序**（与 ``file_flow_steps`` 默认一致）：
+**模块分工与推荐顺序**（与 ``file_flow_steps`` 默认一致）：
 
-1. ``pdf_prepare``：PDF 全文 → 按 ``schema.json`` 生成 ``*_work.json``；若 ``file_flow_llm_extract=true``，
-   按每字段 **field_name + description** 调用大模型从全文摘录写入 ``content``。
-2. ``llm_fill``：按 **文书名称、字段名、字段说明、content** 与 ``standards.json`` 同下标的 **standard**（【评审问题】）拼接后调用大模型，写入 ``answer``。
-3. ``standards_review``：按 ``standards.json`` 顶层数组逐项（``category`` / ``subcategory`` / ``content`` / ``standard`` 等）结合案卷摘录调用大模型，写入 ``standards_review``。
+1. ``pdf_prepare``（``pdf_prepare.py`` + ``pdf_text_extract``）
+   PDF → 纯文本 ``*_fulltext.txt``；按 schema 生成 ``*_work.json`` 骨架。
+   若 ``file_flow_llm_extract=true``，在同一文件内调用 ``schema_llm_extract``：**只**按 field_name + description
+   从全文摘录写入 ``content``，**不**读 ``standards``、不拼「评审问题」类 user 块。
+
+2. ``llm_fill``（``llm_fill.py``）
+   在已有 ``content`` 之后：按文书→字段顺序，与 ``standards.json`` 顶层数组 **按下标** 对齐取 ``standard``
+   作为【评审问题】，调用大模型写入 ``answer``（字段级对照）。
+
+3. ``standards_review``（``standards_llm_review.py``）
+   按 ``standards.json`` 清单每一项结合案卷摘录汇总调用大模型，写入 ``standards_review``。
+
 4. ``render_html``：渲染 HTML。
 
-- ``load_merged_pipeline_config``：仅从磁盘 ``pipeline.json`` 加载已声明的键，**不**与仓库根配置、也不与 ``defaults_from_environment()`` 合并；密钥等请用 ``file_flow/.env`` 或系统环境变量（由各子模块直接读 ``os.environ``）。
-- ``run_file_flow``：根据 ``file_flow_steps`` 依次执行；``file_flow_auto_batch`` 未出现在配置中时**默认开启**，
+- ``load_merged_pipeline_config``：仅从磁盘 ``pipeline.json`` 加载已声明键，**不**与仓库根配置、也不与
+  ``defaults_from_environment()`` 合并；密钥等用 ``file_flow/.env`` 或环境变量。
+- ``run_file_flow``：根据 ``file_flow_steps`` 依次执行；``file_flow_auto_batch`` 未出现时**默认开启**，
   对 ``file_flow_out_dir`` 下符合后缀规则的 JSON 批量执行 llm_fill、standards_review、render_html。
-  产出文件名后缀由 ``file_flow_suffix_work`` / ``file_flow_suffix_answered`` / ``file_flow_suffix_review`` 控制（默认 ``_work`` / ``_answered`` / ``_review``）。
+  产出文件名后缀由 ``file_flow_suffix_work`` / ``file_flow_suffix_answered`` / ``file_flow_suffix_review`` 控制。
 
 用法（在包含 ``file_flow`` 包的上级目录执行，一般为仓库根）::
 

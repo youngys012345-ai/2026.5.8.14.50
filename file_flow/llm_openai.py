@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-file_flow 专用：OpenAI 兼容 Chat Completions 文本调用、日志、配置解析。
+file_flow 专用：OpenAI 兼容 Chat Completions 文本调用、日志、连接参数解析。
 
-不依赖 ``review_standard_llm_fill`` / ``vlm_client``；大模型 URL/模型/超时等可从环境变量或
-``pipeline.json``（由 ``load_merged_pipeline_config`` 仅从磁盘加载的字典；不与环境默认字典合并）读取。
+各环节 **system** 须分别指定：``build_llm_env_config(merged, system_prompt)`` 由调用方传入本环节的
+``system_prompt``（如 ``schema_llm_extract.load_schema_extract_system_prompt``、
+``standards_llm_review.load_standards_review_system_prompt``、或 ``llm_fill`` 使用的字段填答默认）。
+勿将 ``FILE_FLOW_SYSTEM_PROMPT``（面向 ``llm_fill``）误当作 schema 摘录的 system。
+
+不依赖 ``review_standard_llm_fill`` / ``openai`` 第三方库：使用标准库 ``urllib`` 向 **Chat Completions**
+端点 POST JSON（``messages`` / ``model``），与 OpenAI 及多数兼容网关一致。
+
+``LLM_API_BASE`` 可为：
+
+- **完整 POST URL**（须含路径 ``.../chat/completions``），将原样使用；或
+- **常见根地址** ``https://主机/.../v1``（可无尾斜杠），将**自动**补全为 ``.../v1/chat/completions``。
+
+URL/模型/超时等从环境变量或 ``pipeline.json``（由 ``load_merged_pipeline_config`` 仅从磁盘加载；不与环境默认字典合并）读取。
 """
 
 from __future__ import annotations
@@ -18,6 +30,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import urlparse
 
 _LOG = logging.getLogger(__name__)
 
@@ -45,6 +58,31 @@ def _extract_message_content(resp: dict[str, Any]) -> str:
                 chunks.append(part["text"])
         return "".join(chunks)
     return ""
+
+
+def normalize_llm_chat_completions_url(api_base: str) -> str:
+    """
+    将 ``LLM_API_BASE`` 规范为可直接 POST 的 Chat Completions URL。
+
+    - 若路径中已含 ``chat/completions``（忽略大小写），返回去除末尾 ``/`` 后的 URL。
+    - 若以 ``/v1`` 结尾（OpenAI、DeepSeek、Groq 等常见兼容形态），追加 ``/chat/completions``。
+    - 若仅有协议与主机（路径为空或 ``/``），追加 ``/v1/chat/completions``。
+    - 其余情况原样返回（便于 Azure 部署 URL、自建网关等显式完整路径）。
+    """
+    u = (api_base or "").strip()
+    if not u:
+        return u
+    u2 = u.rstrip("/")
+    low = u2.lower()
+    if "chat/completions" in low:
+        return u2
+    if low.endswith("/v1"):
+        return u2 + "/chat/completions"
+    parsed = urlparse(u2)
+    path = (parsed.path or "").strip("/")
+    if path == "":
+        return u2 + "/v1/chat/completions"
+    return u2
 
 
 def is_http_endpoint_url(value: str | None) -> bool:
@@ -139,6 +177,28 @@ def _collect_llm_api_key_chain() -> tuple[str, ...]:
     return tuple(out)
 
 
+def _default_field_fill_system_prompt(merged: dict[str, Any] | None) -> str:
+    """
+    第二步 ``llm_fill`` 专用：对照各字段 content 与 standards 同下标的评审要点作答。
+    与第一步 schema 全文摘录、第三步 standards 清单评审的 system 相互独立，勿混用。
+    """
+    m = merged or {}
+    return (
+        _env_first(
+            "FILE_FLOW_SYSTEM_PROMPT",
+            "REVIEW_FIELD_QA_SYSTEM_PROMPT",
+            "LLM_SYSTEM_PROMPT",
+        )
+        or _merged_str(m, "file_flow_llm_system_prompt")
+        or _merged_str(m, "vlm_system_prompt")
+        or (
+            "你是行政执法案卷评审助手。用户会提供某一字段从案卷中抽取的相关文字（content）、以及需要对照的评审要点。"
+            "请严格依据「抽取内容」作答：先给出简要结论，再说明依据；不得臆测材料中不存在的内容。"
+            "若材料不足以判断，须明确说明「无法判断」并简述原因。使用简体中文。"
+        )
+    )
+
+
 def _timeout_from_env_and_merged(merged: dict[str, Any] | None) -> float:
     raw = _env_first("LLM_TIMEOUT_SEC")
     if raw is not None:
@@ -157,16 +217,10 @@ def _timeout_from_env_and_merged(merged: dict[str, Any] | None) -> float:
     return 120.0
 
 
-def load_llm_config_for_file_flow(merged: dict[str, Any] | None = None) -> LlmEnvConfig:
+def build_llm_env_config(merged: dict[str, Any] | None, system_prompt: str) -> LlmEnvConfig:
     """
-    解析 LLM 配置。优先级：**环境变量** > ``pipeline.json`` 中的 ``file_flow_llm_*`` > ``vlm_*`` 兜底。
-
-    注意：发起请求须同时具备 **API 地址** 与 **模型名**（``LLM_MODEL`` 等）；仅 ``LLM_API_BASE`` 不够。
-
-    - ``LLM_API_BASE`` / ``file_flow_llm_api_base`` / ``vlm_api_base``（须为完整 ``http(s)`` Chat Completions POST URL，原样用于请求，不做路径拼接）
-    - ``LLM_MODEL`` / ``file_flow_llm_model`` / ``vlm_model``
-    - 系统提示：``FILE_FLOW_SYSTEM_PROMPT``、``REVIEW_FIELD_QA_SYSTEM_PROMPT``、``LLM_SYSTEM_PROMPT``、
-      ``file_flow_llm_system_prompt``、``vlm_system_prompt``、内置默认
+    仅解析连接参数（URL / 模型 / 超时 / 密钥链），``system_prompt`` 由调用方按环节传入，
+    避免把「字段填答/评审」的默认 system 误用到 schema 全文摘录等环节。
     """
     m = merged or {}
     api_base = (
@@ -180,39 +234,43 @@ def load_llm_config_for_file_flow(merged: dict[str, Any] | None = None) -> LlmEn
         or _merged_str(m, "vlm_model")
     )
     timeout_sec = _timeout_from_env_and_merged(m)
-    sys_prompt = (
-        _env_first(
-            "FILE_FLOW_SYSTEM_PROMPT",
-            "REVIEW_FIELD_QA_SYSTEM_PROMPT",
-            "LLM_SYSTEM_PROMPT",
-        )
-        or _merged_str(m, "file_flow_llm_system_prompt")
-        or _merged_str(m, "vlm_system_prompt")
-        or (
-            "你是行政执法案卷评审助手。用户会提供某一字段从案卷中抽取的相关文字（content）、以及需要对照的评审要点。"
-            "请严格依据「抽取内容」作答：先给出简要结论，再说明依据；不得臆测材料中不存在的内容。"
-            "若材料不足以判断，须明确说明「无法判断」并简述原因。使用简体中文。"
-        )
-    )
     key_chain = _collect_llm_api_key_chain()
     cfg = LlmEnvConfig(
         api_base=api_base,
         api_keys=key_chain,
         model=model,
         timeout_sec=timeout_sec,
-        system_prompt=sys_prompt,
+        system_prompt=system_prompt,
     )
-    src = "环境变量+pipeline"
+    role = "（本环节 system）"
+    sp = (system_prompt or "").replace("\n", " ").strip()
+    if len(sp) > 80:
+        sp = sp[:79] + "…"
     _LOG.info(
-        "[环节:配置] file_flow LLM：api_base=%s model=%s timeout=%s api_key槽位=%s（首个=%s） 来源=%s",
+        "[环节:配置] file_flow LLM 连接：api_base=%s model=%s timeout=%s api_key槽位=%s（首个=%s） system 前80字=%s %s",
         cfg.api_base or "(未设置)",
         cfg.model or "(未设置)",
         cfg.timeout_sec,
         len(cfg.api_keys),
         _mask_secret(cfg.api_key),
-        src,
+        sp or "(空)",
+        role,
     )
     return cfg
+
+
+def load_llm_config_for_file_flow(merged: dict[str, Any] | None = None) -> LlmEnvConfig:
+    """
+    解析 LLM 配置，供 **第二步** ``llm_fill``（字段 content + standards 按下标对齐的评审问题 → answer）使用。
+
+    连接项优先级：**环境变量** > ``pipeline.json`` 的 ``file_flow_llm_*`` > ``vlm_*`` 兜底。
+    system 优先级：``FILE_FLOW_SYSTEM_PROMPT`` / ``REVIEW_FIELD_QA_SYSTEM_PROMPT`` / ``LLM_SYSTEM_PROMPT`` /
+    ``file_flow_llm_system_prompt`` / ``vlm_system_prompt`` / 内置「对照抽取内容作答」默认。
+
+    **注意**：schema 全文摘录请用 ``build_llm_env_config(merged, load_schema_extract_system_prompt(...))``（见 ``schema_llm_extract``）；
+    standards 清单评审请用 ``build_llm_env_config(merged, load_standards_review_system_prompt(...))``（见 ``standards_llm_review``）。
+    """
+    return build_llm_env_config(merged, _default_field_fill_system_prompt(merged))
 
 
 def iter_top_level_sections(data: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
@@ -251,21 +309,31 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
     """遇 429/503 时在同一调用内轮换 ``api_keys`` 重试。"""
     if not cfg.api_base or not str(cfg.api_base).strip():
         raise RuntimeError(
-            "未读取到大模型 API 地址：请设置 LLM_API_BASE 或 OPENAI_API_BASE（须为完整 http(s) Chat Completions POST URL，原样用于请求），"
+            "未读取到大模型 API 地址：请设置 LLM_API_BASE 或 OPENAI_API_BASE（OpenAI 兼容网关可用 ``https://主机/.../v1``，"
+            "程序将自动补全为 ``.../v1/chat/completions``；或直接写完整 POST URL），"
             "或在 file_flow/pipeline.json 中配置 file_flow_llm_api_base / vlm_api_base。"
-            "若使用 .env：除 file_flow/.env 外，也会在之后尝试加载上一级目录（通常为仓库根）的 .env 以补缺同名变量。"
+            "环境变量从操作系统已注入的键读取；若写在 .env 中：运行前须已执行 ``ensure_step_dotenv_loaded``（"
+            "``pipeline_merge`` / ``pdf_prepare`` 等入口会在导入时加载 ``file_flow/.env`` 与上一级目录 ``.env``）。"
         )
     if not cfg.model or not str(cfg.model).strip():
         raise RuntimeError(
             "未读取到大模型名称：请设置 LLM_MODEL（或 OPENAI_MODEL、file_flow_llm_model、vlm_model）。"
             "仅配置 LLM_API_BASE 不足以发起调用。"
         )
-    url = cfg.api_base.strip()
+    raw = cfg.api_base.strip()
+    url = normalize_llm_chat_completions_url(raw)
+    if url != raw.rstrip("/"):
+        _LOG.info(
+            "[环节:API] LLM_API_BASE 已规范为 Chat Completions 地址（原为根路径时可自动补全）: %s -> %s",
+            raw,
+            url,
+        )
     if not is_http_endpoint_url(url):
         preview = url if len(url) <= 120 else url[:117] + "..."
         raise RuntimeError(
-            "LLM_API_BASE 须为以 http:// 或 https:// 开头的完整 Chat Completions POST URL，"
-            f"当前值为: {preview!r}"
+            "LLM_API_BASE 须为以 http:// 或 https:// 开头的 URL；若为 OpenAI 兼容网关，"
+            "可使用 ``https://主机/.../v1`` 或完整 ``.../v1/chat/completions``。"
+            f"当前规范化后为: {preview!r}"
         )
     key_slots: list[str | None] = list(cfg.api_keys) if cfg.api_keys else [None]
     if len(key_slots) > 1:
