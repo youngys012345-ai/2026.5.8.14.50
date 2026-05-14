@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-file_flow 包内自包含副本：环境变量与 JSON 管线配置合并（与仓库根 ``pipeline_config.py`` 逻辑一致）。
+file_flow 包内自包含副本：环境变量与 JSON 管线配置相关工具（与仓库根 ``pipeline_config.py`` 逻辑一致）。
 
-合并优先级（后者覆盖同名键）：pipeline.json → 环境变量（OPENDATALOADER_* 等）→ 命令行参数。
+说明：``file_flow.pipeline_merge.load_merged_pipeline_config`` **仅**调用 ``load_config_file`` 读取磁盘 ``pipeline.json``，
+不与 ``defaults_from_environment()`` 做字典合并；密钥等请用 ``file_flow/.env`` 或系统环境。
+
+下列「合并优先级」适用于仓库根 ``extract_pdf`` 等仍使用 ``merge_defaults(..., defaults_from_environment())`` 的场景：
+pipeline.json → 环境变量（OPENDATALOADER_* 等）→ 命令行参数。
+
 业务默认值写在 ``file_flow/pipeline.json``；部署相关覆盖放在 ``file_flow/.env`` 或环境变量。
 
 未设置 ``OPENDATALOADER_VLM_*`` 时，VLM 的 ``vlm_api_base`` 可从 ``LLM_API_BASE`` 读取（须为完整

@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-file_flow 管线编排：合并 ``pipeline.json``（默认使用 ``file_flow`` 包目录下的 ``pipeline.json``）与环境默认值，并按配置顺序以 **Python 调用** 各步骤，
+file_flow 管线编排：读取 ``file_flow/pipeline.json``（或 ``--config`` 指定路径）中的允许键，并按配置顺序以 **Python 调用** 各步骤，
 无需在终端分别敲 ``pdf_prepare`` / ``llm_fill`` / ``render_html``。
 
-- ``load_merged_pipeline_config``：读盘合并（``pipeline.json`` 为底，环境覆盖同名键）。
+**推荐业务顺序**（与 ``file_flow_steps`` 默认一致）：
+
+1. ``pdf_prepare``：PDF 全文 → 按 ``schema.json`` 生成 ``*_work.json``；若 ``file_flow_llm_extract=true``，
+   按每字段 **field_name + description** 调用大模型从全文摘录写入 ``content``。
+2. ``llm_fill``：按 **文书名称、字段名、字段说明、content** 与 ``standards.json`` 同下标的 **standard**（【评审问题】）拼接后调用大模型，写入 ``answer``。
+3. ``standards_review``：按 ``standards.json`` 顶层数组逐项（``category`` / ``subcategory`` / ``content`` / ``standard`` 等）结合案卷摘录调用大模型，写入 ``standards_review``。
+4. ``render_html``：渲染 HTML。
+
+- ``load_merged_pipeline_config``：仅从磁盘 ``pipeline.json`` 加载已声明的键，**不**与仓库根配置、也不与 ``defaults_from_environment()`` 合并；密钥等请用 ``file_flow/.env`` 或系统环境变量（由各子模块直接读 ``os.environ``）。
 - ``run_file_flow``：根据 ``file_flow_steps`` 依次执行；``file_flow_auto_batch`` 未出现在配置中时**默认开启**，
   对 ``file_flow_out_dir`` 下符合后缀规则的 JSON 批量执行 llm_fill、standards_review、render_html。
   产出文件名后缀由 ``file_flow_suffix_work`` / ``file_flow_suffix_answered`` / ``file_flow_suffix_review`` 控制（默认 ``_work`` / ``_answered`` / ``_review``）。
 
-用法（在包含 ``file_flow`` 包的上级目录执行）::
+用法（在包含 ``file_flow`` 包的上级目录执行，一般为仓库根）::
 
     python -m file_flow.pipeline_merge
+    python run_file_flow.py
     python -m file_flow.pipeline_merge --config my_pipeline.json --dry-run
 
 或在代码中::
@@ -46,9 +55,7 @@ from .naming import (
     work_glob_pattern,
 )
 from .pipeline_config import (
-    defaults_from_environment,
     load_config_file,
-    merge_defaults,
     resolve_pipeline_config_path,
 )
 
@@ -67,11 +74,14 @@ def file_flow_root() -> Path:
 
 def load_merged_pipeline_config(pipeline_path: Path | None) -> dict[str, Any]:
     """
-    合并：先读 ``pipeline.json`` 中允许的键，再叠 ``defaults_from_environment()``（后者覆盖同名键）。
+    仅从 ``pipeline.json`` 读取 ``pipeline_config.CONFIG_KEYS`` 中允许的键。
+
+    不与仓库根 ``pipeline.json``、不与 ``defaults_from_environment()`` 做字典合并；
+    未找到有效配置文件时返回空字典（各步骤按 pipeline 缺省逻辑或环境变量自行处理）。
     """
     if pipeline_path is None or not pipeline_path.is_file():
-        return defaults_from_environment()
-    return merge_defaults(load_config_file(pipeline_path), defaults_from_environment())
+        return {}
+    return load_config_file(pipeline_path)
 
 
 def resolve_pipeline_disk_path(workspace: Path, config_path: Path | None) -> Path | None:
@@ -179,7 +189,7 @@ def run_file_flow(
             _LOG.info("已加载环境文件: %s", p)
     else:
         _LOG.info(
-            "未找到 %s 下的 .env 或 环节变量.env（可将 .env 放在与 pipeline.json 同级目录）",
+            "未从 %s 及其上一级目录找到任何 .env / 环节变量.env（可将 LLM_* 写在仓库根 .env 或本目录 .env）",
             ws.resolve(),
         )
 
@@ -191,7 +201,7 @@ def run_file_flow(
         _LOG.info("管线配置文件: %s", disk.resolve())
     else:
         _LOG.warning(
-            "未找到管线 JSON（已仅用环境变量合并）。期望路径: %s 或传入 --config",
+            "未找到管线 JSON，merged 为空字典。期望路径: %s 或传入 --config",
             (ws / "pipeline.json").resolve(),
         )
 
@@ -506,6 +516,9 @@ def run_file_flow(
         _LOG.warning("未知步骤，已跳过: %s", step)
     _LOG.info("全部步骤完成，exit_code=0")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="按 pipeline.json 编排执行 file_flow 全流程")
     ap.add_argument(
         "--config",

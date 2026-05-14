@@ -8,11 +8,12 @@ file_flow 全文抽取：与主流程 ``extract_pdf`` 对齐 **OpenDataLoader** 
 **改用 PyMuPDF** 本地抽字（与 ``file_flow_pdf_text_backend=pymupdf`` 效果类似，元数据会标明
 ``mineru_disabled_use_pymupdf``）。
 
-- ``hybrid`` / ``hybrid_url`` / ``hybrid_mode`` / ``hybrid_timeout`` / ``hybrid_fallback`` /
-  ``skip_health_check`` 等与主流程一致；云端 Hybrid 配 ``hybrid_url``；``hybrid_fallback=true`` 时
-  Hybrid 失败由 **Java 管线兜底**（``opendataloader_pdf`` 内部）。
+- ``hybrid`` / ``hybrid_url`` / ``hybrid_mode`` / ``hybrid_timeout`` / ``hybrid_fallback`` 等与主流程一致；
+  云端 Hybrid 须正确配置 ``hybrid_url``（未传入时底层可能访问默认端口如 8000）。
+- ``skip_health_check``：file_flow 内**默认 true**（不请求 ``{hybrid_url}/health``）；若需启动前探测请设为 ``false``。
+  ``hybrid_fallback=true`` 时 Hybrid 失败由 **Java 管线兜底**（``opendataloader_pdf`` 内部）。
 
-手动开关（合并后的 ``merged``）：
+手动开关（``pipeline.json`` 读入的 ``merged``）：
 
 - ``file_flow_pdf_text_backend``：``pipeline``（默认，OpenDataLoader 管线）| ``pymupdf``（强制仅用本地 PyMuPDF）；
 - ``file_flow_pdf_fallback_pymupdf``：``true``（默认）时，OpenDataLoader 失败再尝试 PyMuPDF。
@@ -22,11 +23,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Any
 
 from .document_export import document_to_markdown
+from .urlutil import client_base_url_for_local_service
 from .opendataloader_adapter import (
     OpenDataLoaderExtractionError,
     load_opendataloader_document,
@@ -34,6 +37,18 @@ from .opendataloader_adapter import (
 )
 
 _LOG = logging.getLogger(__name__)
+
+
+def _hybrid_url_effective(merged: dict[str, Any]) -> str:
+    """pipeline.json 的 hybrid_url；缺省时读环境（不再与 defaults_from_environment 合并时仍可用 .env）。"""
+    v = merged.get("hybrid_url")
+    if isinstance(v, str) and v.strip():
+        return v.strip()
+    for key in ("OPENDATALOADER_HYBRID_URL", "HYBRID_URL"):
+        e = os.environ.get(key)
+        if isinstance(e, str) and e.strip():
+            return e.strip()
+    return ""
 
 
 def _truthy(merged: dict[str, Any], key: str, default: bool = True) -> bool:
@@ -78,8 +93,10 @@ def _extract_opendataloader(
     hybrid_raw = merged.get("hybrid")
     hybrid_s = str(hybrid_raw).strip() if hybrid_raw is not None else "off"
     hybrid = None if hybrid_s == "off" else hybrid_s
-    hybrid_url = merged.get("hybrid_url")
-    url_s = str(hybrid_url).strip() if hybrid_url is not None else ""
+    raw_hybrid = _hybrid_url_effective(merged)
+    url_s = client_base_url_for_local_service(raw_hybrid)
+    if url_s != raw_hybrid:
+        _LOG.warning("hybrid_url 已从 %r 规范为 %r（0.0.0.0 不可作为 HTTP 客户端目标）", raw_hybrid, url_s)
     hybrid_mode = str(merged.get("hybrid_mode") or "auto").strip()
     hybrid_timeout = merged.get("hybrid_timeout")
     if hybrid_timeout is None:
@@ -90,7 +107,22 @@ def _extract_opendataloader(
         health_t = float(merged.get("hybrid_health_timeout_sec") or 15.0)
     except (TypeError, ValueError):
         health_t = 15.0
-    skip_health = _truthy(merged, "skip_health_check", False)
+    # file_flow 默认跳过 /health，避免无谓探测；若需探测请在 pipeline.json 设 skip_health_check: false
+    skip_health = _truthy(merged, "skip_health_check", True)
+
+    if hybrid and hybrid != "off" and not url_s:
+        raise OpenDataLoaderExtractionError(
+            "已启用 hybrid 但未解析到 hybrid_url（请在 file_flow/pipeline.json 填写 hybrid_url，"
+            "或在 file_flow/.env 设置 OPENDATALOADER_HYBRID_URL）。"
+            "未传 URL 时底层库可能访问默认端口（常见 8000），与本地 Hybrid 端口不一致。"
+        )
+
+    _LOG.info(
+        "[全文抽取] hybrid=%s hybrid_url=%s skip_health_check=%s",
+        hybrid_s,
+        url_s or "(空)",
+        skip_health,
+    )
 
     _odl_key = hashlib.sha256(str(pdf.resolve()).encode("utf-8")).hexdigest()[:24]
     per_dir = (out_dir / "_opendataloader_work" / f"odl_{_odl_key}").resolve()
@@ -118,6 +150,7 @@ def _extract_opendataloader(
             "pdf_text_backend": "opendataloader",
             "pdf_text_hybrid": hybrid_s,
             "pdf_text_hybrid_fallback": hybrid_fallback,
+            "pdf_text_hybrid_url": url_s,
         }
         return text, meta
     finally:

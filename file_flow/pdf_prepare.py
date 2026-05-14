@@ -247,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
         "--config",
         type=Path,
         default=None,
-        help="管线 JSON；默认使用 file_flow 目录下的 pipeline.json，与包内 pipeline_config 合并后读取 file_flow_* 及 backend/hybrid 等键",
+        help="管线 JSON；默认使用 file_flow 目录下的 pipeline.json，仅读取其中已声明的 file_flow_* 及 backend/hybrid 等键（不与仓库根配置、不与环境默认字典合并）",
     )
     ap.add_argument("--pdf-dir", type=Path, default=None, help="存放 PDF 的目录（可与 pipeline 中 file_flow_pdf_dir 二选一）")
     ap.add_argument(

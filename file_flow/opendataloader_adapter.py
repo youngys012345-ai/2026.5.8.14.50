@@ -12,6 +12,8 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from .urlutil import client_base_url_for_local_service
+
 
 class OpenDataLoaderExtractionError(RuntimeError):
     """OpenDataLoader 提取异常。"""
@@ -105,10 +107,16 @@ def run_opendataloader_for_pdf(
         }
         if hybrid and hybrid != "off":
             kwargs["hybrid"] = hybrid
-            if hybrid_url:
-                kwargs["hybrid_url"] = hybrid_url
+            eff_url = client_base_url_for_local_service(str(hybrid_url or "").strip())
+            if eff_url:
+                kwargs["hybrid_url"] = eff_url
                 if not skip_hybrid_health_check:
-                    _assert_hybrid_service_ready(hybrid_url, timeout_sec=hybrid_health_timeout_sec)
+                    _assert_hybrid_service_ready(eff_url, timeout_sec=hybrid_health_timeout_sec)
+            else:
+                raise OpenDataLoaderExtractionError(
+                    "hybrid 已启用但未提供 hybrid_url，底层 opendataloader_pdf 可能使用内置默认端口（常见 8000）。"
+                    "请在配置中传入 hybrid_url（例如 http://127.0.0.1:5002）。"
+                )
             kwargs["hybrid_mode"] = hybrid_mode
             kwargs["hybrid_timeout"] = str(hybrid_timeout)
 

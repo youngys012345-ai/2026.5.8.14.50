@@ -4,7 +4,7 @@
 file_flow 专用：OpenAI 兼容 Chat Completions 文本调用、日志、配置解析。
 
 不依赖 ``review_standard_llm_fill`` / ``vlm_client``；大模型 URL/模型/超时等可从环境变量或
-``pipeline.json``（经 ``load_merged_pipeline_config`` 合并后的字典）读取。
+``pipeline.json``（由 ``load_merged_pipeline_config`` 仅从磁盘加载的字典；不与环境默认字典合并）读取。
 """
 
 from __future__ import annotations
@@ -161,7 +161,9 @@ def load_llm_config_for_file_flow(merged: dict[str, Any] | None = None) -> LlmEn
     """
     解析 LLM 配置。优先级：**环境变量** > ``pipeline.json`` 中的 ``file_flow_llm_*`` > ``vlm_*`` 兜底。
 
-    - ``LLM_API_BASE`` / ``file_flow_llm_api_base`` / ``vlm_api_base``（须为完整 ``http(s)`` Chat POST URL）
+    注意：发起请求须同时具备 **API 地址** 与 **模型名**（``LLM_MODEL`` 等）；仅 ``LLM_API_BASE`` 不够。
+
+    - ``LLM_API_BASE`` / ``file_flow_llm_api_base`` / ``vlm_api_base``（须为完整 ``http(s)`` Chat Completions POST URL，原样用于请求，不做路径拼接）
     - ``LLM_MODEL`` / ``file_flow_llm_model`` / ``vlm_model``
     - 系统提示：``FILE_FLOW_SYSTEM_PROMPT``、``REVIEW_FIELD_QA_SYSTEM_PROMPT``、``LLM_SYSTEM_PROMPT``、
       ``file_flow_llm_system_prompt``、``vlm_system_prompt``、内置默认
@@ -247,12 +249,23 @@ def _post_chat_completion_once(
 
 def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
     """遇 429/503 时在同一调用内轮换 ``api_keys`` 重试。"""
-    if not cfg.api_base or not cfg.model:
-        raise RuntimeError("缺少 LLM_API_BASE 或 LLM_MODEL（或 pipeline 中 file_flow_llm_* / vlm_*），无法调用大模型。")
+    if not cfg.api_base or not str(cfg.api_base).strip():
+        raise RuntimeError(
+            "未读取到大模型 API 地址：请设置 LLM_API_BASE 或 OPENAI_API_BASE（须为完整 http(s) Chat Completions POST URL，原样用于请求），"
+            "或在 file_flow/pipeline.json 中配置 file_flow_llm_api_base / vlm_api_base。"
+            "若使用 .env：除 file_flow/.env 外，也会在之后尝试加载上一级目录（通常为仓库根）的 .env 以补缺同名变量。"
+        )
+    if not cfg.model or not str(cfg.model).strip():
+        raise RuntimeError(
+            "未读取到大模型名称：请设置 LLM_MODEL（或 OPENAI_MODEL、file_flow_llm_model、vlm_model）。"
+            "仅配置 LLM_API_BASE 不足以发起调用。"
+        )
     url = cfg.api_base.strip()
     if not is_http_endpoint_url(url):
+        preview = url if len(url) <= 120 else url[:117] + "..."
         raise RuntimeError(
-            "LLM API 地址须为以 http:// 或 https:// 开头的完整 Chat Completions POST URL。"
+            "LLM_API_BASE 须为以 http:// 或 https:// 开头的完整 Chat Completions POST URL，"
+            f"当前值为: {preview!r}"
         )
     key_slots: list[str | None] = list(cfg.api_keys) if cfg.api_keys else [None]
     if len(key_slots) > 1:

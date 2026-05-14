@@ -4,7 +4,7 @@
 在上一步 ``*_work.json``（或填答后的 JSON）含 ``document_types`` 与各字段 ``content`` 之后，
 读取 **评审标准清单** JSON（与 ``out/standards_example.json`` 一致：顶层数组），
 对其中**每一项**调用大模型：将 ``category``、``subcategory``、``content`` 拼成「分类上下文」，
-对照 ``standard`` 作答；将模型输出写入该条目的 ``review_answer``。
+对照条目的 ``standard`` 字段作答；将模型输出写入该条目的 ``review_answer``。
 
 最终写出**结果 JSON**：在输入工作 JSON 的完整拷贝上增加 ``standards_review`` 对象
 （含 ``items``：原字段 + ``review_answer``，以及 ``standards_path`` 等元数据），便于下游可视化。

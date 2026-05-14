@@ -1,27 +1,39 @@
 # -*- coding: utf-8 -*-
-"""file_flow/schema_llm_extract：纯文本摘录与 document_types 装配单测。"""
+"""file_flow/schema_llm_extract：摘录与 document_types 装配单测。"""
 
 from __future__ import annotations
 
 from file_flow.llm_openai import LlmEnvConfig
 from file_flow.pdf_prepare import apply_full_text_to_all_contents, build_work_json_skeleton
 from file_flow.schema_llm_extract import (
-    build_case_extract_user_prompt,
+    build_field_extract_user_prompt,
     build_public_context,
     enrich_work_json_with_llm_schema_extract,
     parse_llm_plain_excerpt,
+    summarize_schema_extract_user_prompt_for_log,
 )
 
 
-def test_parse_llm_plain_excerpt_strips_fence() -> None:
-    assert parse_llm_plain_excerpt("```\n摘录一段\n```") == "摘录一段"
+def test_summarize_schema_user_prompt_structure_only() -> None:
+    pub = build_public_context("甲文书", "文书说明一行")
+    u = build_field_extract_user_prompt(pub, "案由", "填写案由", "X" * 5000)
+    s = summarize_schema_extract_user_prompt_for_log(u)
+    assert "结构摘要" in s
+    assert "5000" in s or "字符数=" in s
+    assert "【PDF 全文】" in s
+    assert "X" * 100 not in s
 
 
-def test_build_public_context_and_user_prompt() -> None:
+def test_parse_llm_plain_excerpt_keeps_markdown_fence() -> None:
+    raw = "```\n摘录一段\n```"
+    assert parse_llm_plain_excerpt(raw) == raw
+
+
+def test_build_public_context_and_field_extract_prompt() -> None:
     pub = build_public_context("立案表", "说明文字")
     assert "立案表" in pub and "说明文字" in pub
-    u = build_case_extract_user_prompt(pub, "要点甲", "案由", "PDF全文示例")
-    assert "要点甲" in u and "PDF全文示例" in u
+    u = build_field_extract_user_prompt(pub, "案由", "填写立案案由", "PDF全文示例")
+    assert "案由" in u and "填写立案案由" in u and "PDF全文示例" in u
 
 
 def test_nested_schema_skeleton() -> None:
@@ -58,7 +70,7 @@ def test_skeleton_then_fulltext() -> None:
     assert w["document_types"][0]["fields"][0]["content"] == "全文"
 
 
-def test_enrich_nested_dry_run_writes_content() -> None:
+def test_enrich_one_call_per_field_dry_run() -> None:
     work = {
         "document_types": [
             {
@@ -67,7 +79,7 @@ def test_enrich_nested_dry_run_writes_content() -> None:
                 "fields": [
                     {
                         "field_name": "F",
-                        "case_sources": [{"description": "要点1"}, {"description": "要点2"}],
+                        "description": "字段说明",
                     }
                 ],
             }
@@ -85,7 +97,7 @@ def test_enrich_nested_dry_run_writes_content() -> None:
     assert "dry-run" in c
 
 
-def test_enrich_document_types_calls_llm_per_field(monkeypatch) -> None:
+def test_enrich_two_fields_two_calls(monkeypatch) -> None:
     calls: list[str] = []
 
     def fake_chat(_cfg, user_text: str) -> str:
@@ -117,5 +129,7 @@ def test_enrich_document_types_calls_llm_per_field(monkeypatch) -> None:
     )
     out = enrich_work_json_with_llm_schema_extract(work, "全文X", cfg, None, dry_run=False)
     assert len(calls) == 2
+    assert "栏A" in calls[0] and "da" in calls[0]
+    assert "栏B" in calls[1] and "db" in calls[1]
     assert out["document_types"][0]["fields"][0]["content"] == "摘录结果"
     assert out["document_types"][0]["fields"][1]["content"] == "摘录结果"

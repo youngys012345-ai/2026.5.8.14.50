@@ -24,7 +24,7 @@ Prompt 模板定义位置（换机迁移时优先核对）
 大模型通过环境变量配置（不设置则可在 --dry-run 下只生成/预览 prompt，不实际请求）。
 推荐统一使用下列变量（与 ``extract_pdf`` 管线中 VLM 的 ``LLM_*`` 环境兜底一致）：
 
-- ``LLM_API_BASE``：完整 Chat Completions **POST URL**（须以 ``http://`` 或 ``https://`` 开头），例如 ``https://api.openai.com/v1/chat/completions``；兼容 ``OPENAI_API_BASE``（若仍使用旧名，请同样填完整 URL）。
+- ``LLM_API_BASE``：完整 Chat Completions **POST URL**（须以 ``http://`` 或 ``https://`` 开头），例如 ``https://api.openai.com/v1/chat/completions``；兼容 ``OPENAI_API_BASE``（若仍使用旧名，请同样填完整 URL）。配置原样用于请求，不做路径拼接。
 - ``LLM_API_KEY``：Bearer Token；兼容 ``OPENAI_API_KEY``。
 - ``LLM_API_KEY_BACKUP1``、``LLM_API_KEY_BACKUP2``：可选备用密钥；当主密钥请求返回 **429** / **503**（限流或服务暂不可用）时，
   同一轮调用内自动换用下一密钥重试，不中断上层轮询流程。
