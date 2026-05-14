@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-file_flow 全文抽取：与仓库根 ``extract_pdf.py`` 使用同一套 ``pipeline.json`` 键，
+file_flow 全文抽取：与主流程 ``extract_pdf`` 对齐 **OpenDataLoader** 相关键（``backend`` 为
+``opendataloader`` 或未识别时走 Java + 可选 Hybrid）。
 
-- ``backend`` = ``mineru`` | ``opendataloader``：分别走 MinerU CLI 或 ``opendataloader_pdf.convert``（Java）；
-- ``opendataloader`` 时 ``hybrid`` / ``hybrid_url`` / ``hybrid_mode`` / ``hybrid_timeout`` /
-  ``hybrid_fallback`` / ``skip_health_check`` 等与主流程一致（云端 Hybrid 配 ``hybrid_url``，
-  ``hybrid_fallback=true`` 时 Hybrid 失败由 **Java 管线兜底**，由 ``opendataloader_pdf`` 内部处理）。
+**说明**：file_flow 当前**暂不支持** ``backend=mineru``；若配置仍为 mineru，将记录警告并
+**改用 PyMuPDF** 本地抽字（与 ``file_flow_pdf_text_backend=pymupdf`` 效果类似，元数据会标明
+``mineru_disabled_use_pymupdf``）。
+
+- ``hybrid`` / ``hybrid_url`` / ``hybrid_mode`` / ``hybrid_timeout`` / ``hybrid_fallback`` /
+  ``skip_health_check`` 等与主流程一致；云端 Hybrid 配 ``hybrid_url``；``hybrid_fallback=true`` 时
+  Hybrid 失败由 **Java 管线兜底**（``opendataloader_pdf`` 内部）。
 
 手动开关（合并后的 ``merged``）：
 
-- ``file_flow_pdf_text_backend``：``pipeline``（默认，跟随 ``backend``）| ``pymupdf``（强制仅用本地 PyMuPDF）；
-- ``file_flow_pdf_fallback_pymupdf``：``true``（默认）时，管线抽取失败再尝试 PyMuPDF。
+- ``file_flow_pdf_text_backend``：``pipeline``（默认，OpenDataLoader 管线）| ``pymupdf``（强制仅用本地 PyMuPDF）；
+- ``file_flow_pdf_fallback_pymupdf``：``true``（默认）时，OpenDataLoader 失败再尝试 PyMuPDF。
 """
 
 from __future__ import annotations
@@ -28,11 +32,6 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from document_export import document_to_markdown  # noqa: E402
-from mineru_adapter import (  # noqa: E402
-    MinerUExtractionError,
-    convert_mineru_content_list_to_document,
-    run_mineru_cli_for_pdf,
-)
 from opendataloader_adapter import (  # noqa: E402
     OpenDataLoaderExtractionError,
     load_opendataloader_document,
@@ -51,21 +50,6 @@ def _truthy(merged: dict[str, Any], key: str, default: bool = True) -> bool:
     if v is None:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")
-
-
-def _resolve_path_str(raw: str | Path | None, workspace: Path, cwd: Path) -> Path | None:
-    if raw is None:
-        return None
-    s = str(raw).strip()
-    if not s:
-        return None
-    p = Path(s)
-    if p.is_absolute():
-        return p.resolve()
-    hit = (cwd / p).resolve()
-    if hit.exists():
-        return hit
-    return (workspace / p).resolve()
 
 
 def _extract_pymupdf(pdf_path: Path) -> str:
@@ -145,42 +129,6 @@ def _extract_opendataloader(
         shutil.rmtree(per_dir, ignore_errors=True)
 
 
-def _extract_mineru(
-    pdf: Path,
-    merged: dict[str, Any],
-    workspace: Path,
-    cwd: Path,
-    out_dir: Path,
-) -> tuple[str, dict[str, Any]]:
-    mpr = _resolve_path_str(merged.get("mineru_project_root"), workspace, cwd)
-    if mpr is None or not mpr.is_dir() or not (mpr / "mineru").is_dir():
-        raise MinerUExtractionError(f"mineru_project_root 无效或缺少 mineru/ 子目录: {mpr}")
-    raw_sub = (out_dir / "_mineru_raw" / pdf.stem).resolve()
-    if raw_sub.exists():
-        shutil.rmtree(raw_sub, ignore_errors=True)
-    raw_sub.mkdir(parents=True, exist_ok=True)
-    content_list_path = run_mineru_cli_for_pdf(
-        pdf_file=pdf,
-        output_root=raw_sub,
-        mineru_project_root=mpr,
-        backend=str(merged.get("mineru_backend") or "pipeline").strip() or None,
-        api_url=str(merged.get("mineru_api_url") or "").strip() or None,
-        model_source=str(merged.get("mineru_model_source") or "").strip() or None,
-        mineru_tools_config_json=str(merged.get("mineru_tools_config_json") or "").strip() or None,
-        cli_timeout_sec=merged.get("mineru_cli_timeout_sec"),
-    )
-    document = convert_mineru_content_list_to_document(
-        content_list_path=content_list_path,
-        source_pdf=pdf,
-    )
-    text = document_to_markdown(document).strip()
-    meta = {
-        "pdf_text_backend": "mineru",
-        "pdf_text_mineru_root": str(mpr),
-    }
-    return text, meta
-
-
 def extract_pdf_full_text_unified(
     pdf: Path,
     merged: dict[str, Any],
@@ -192,8 +140,11 @@ def extract_pdf_full_text_unified(
     """
     按 ``merged`` 与 ``file_flow_pdf_text_backend`` 抽取全文，返回 ``(text, meta_dict)``。
 
-    ``meta_dict`` 会并入 ``_file_flow_meta``（如 ``pdf_text_backend``、回退原因等）。
+    ``workspace`` / ``cwd`` 保留签名供日后扩展；当前 OpenDataLoader 分支未使用。
+    ``meta_dict`` 会并入 ``_file_flow_meta``。
     """
+    _ = workspace, cwd  # 预留与路径解析扩展一致
+
     mode = str(merged.get("file_flow_pdf_text_backend") or "pipeline").strip().lower()
     fallback = _truthy(merged, "file_flow_pdf_fallback_pymupdf", True)
 
@@ -205,22 +156,28 @@ def extract_pdf_full_text_unified(
         _LOG.warning("[全文抽取] 未知 file_flow_pdf_text_backend=%r，按 pipeline 处理", mode)
 
     backend = _backend_from_merged(merged)
+    if backend == "mineru":
+        _LOG.warning(
+            "[全文抽取] file_flow 暂不支持 MinerU（backend=mineru），已改用 PyMuPDF 抽取全文。"
+        )
+        t = _extract_pymupdf(pdf)
+        return t, {
+            "pdf_text_backend": "pymupdf",
+            "pdf_text_mode": "mineru_disabled_use_pymupdf",
+        }
+
     try:
-        if backend == "mineru":
-            text, meta = _extract_mineru(pdf, merged, workspace, cwd, out_dir)
-            meta["pdf_text_mode"] = "pipeline"
-            return text, meta
         text, meta = _extract_opendataloader(pdf, merged, out_dir)
         meta["pdf_text_mode"] = "pipeline"
         return text, meta
-    except (MinerUExtractionError, OpenDataLoaderExtractionError, OSError, RuntimeError) as exc:
+    except (OpenDataLoaderExtractionError, OSError, RuntimeError) as exc:
         if not fallback:
             raise
-        _LOG.warning("[全文抽取] 管线后端失败，回退 PyMuPDF: %s", exc)
+        _LOG.warning("[全文抽取] OpenDataLoader 失败，回退 PyMuPDF: %s", exc)
         t = _extract_pymupdf(pdf)
         return t, {
             "pdf_text_backend": "pymupdf",
             "pdf_text_mode": "fallback_after_pipeline_error",
-            "pdf_text_pipeline_backend": backend,
+            "pdf_text_pipeline_backend": "opendataloader",
             "pdf_text_fallback_reason": str(exc)[:800],
         }

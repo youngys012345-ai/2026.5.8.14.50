@@ -17,7 +17,7 @@
 
   "markdown_by_page": true,
 
-  "__后端选择": "backend：mineru 表示调用本地 MinerU 源码 CLI；opendataloader 表示调用 Java 包 opendataloader_pdf（须 Java 11+）。",
+  "__后端选择": "backend：mineru 表示 extract_pdf 用本地 MinerU；opendataloader 为 Java 包。**file_flow/pdf_prepare 暂不接 MinerU：若仍为 mineru 则自动用 PyMuPDF 抽字；建议 file_flow 场景下 backend 填 opendataloader。**",
 
   "backend": "opendataloader",
 

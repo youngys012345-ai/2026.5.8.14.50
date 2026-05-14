@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-文件模式第一步：从 PDF 目录读取 PDF，抽取全文（默认与 ``extract_pdf`` 对齐：``backend``、Hybrid、
-Java 管线及 ``hybrid_fallback``；可用 ``file_flow_pdf_text_backend=pymupdf`` 强制本地 PyMuPDF），
+文件模式第一步：从 PDF 目录读取 PDF，抽取全文（默认走 **OpenDataLoader**（Java + 可选 Hybrid、
+``hybrid_fallback`` 兜底）；``backend=mineru`` 在 file_flow 中暂不支持，会自动改用 PyMuPDF）。
+可用 ``file_flow_pdf_text_backend=pymupdf`` 强制仅用本地 PyMuPDF。
 再按 **document_types** schema（与 ``file_flow/out/schema_example.json`` 一致）深拷贝生成工作 JSON。
 
 schema **必须**包含非空 ``document_types`` 数组；默认 schema 路径为 ``file_flow/out/schema_example.json``
