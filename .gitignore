@@ -18,3 +18,7 @@ local_models/
 # 抽取输出与对比目录（应本地生成）
 output/
 output_*/
+
+# 本地密钥与部署覆盖（勿提交仓库）
+.env
+环节变量.env

@@ -7,7 +7,7 @@ PDF 批量解析：
   将 content_list 转为统一 kids 结构。
 - **opendataloader**：调用 ``opendataloader_pdf.convert``（需 Java 11+）。
 
-输出目录、后端参数等均在项目根 ``pipeline.json``（或 ``--config``）中配置，代码内不写业务默认值。
+输出目录、后端参数等默认在项目根 ``pipeline.json``（或 ``--config``）；同名键可被环境变量（如 ``OPENDATALOADER_HYBRID_URL``）覆盖，再被命令行覆盖。
 
 模块导入时会通过 ``step_dotenv`` 加载项目根与当前目录下的 ``.env`` / ``环节变量.env``。
 若未设置 ``OPENDATALOADER_VLM_*``，VLM 可选用与评审环节相同的 ``LLM_API_BASE``（完整 POST URL）、
@@ -613,7 +613,6 @@ def main() -> int:
         return 1
     config_from_argv, argv_rest = pop_config_path_from_argv(sys.argv[1:])
     parser = _build_parser()
-    merged = merge_defaults({}, defaults_from_environment())
     workspace = Path(__file__).resolve().parent
     cfg_path = config_from_argv
     if cfg_path is None:
@@ -638,7 +637,8 @@ def main() -> int:
         print(cfg_hint, file=sys.stderr)
     cfg_path = resolved_cfg
     try:
-        merged.update(load_config_file(cfg_path))
+        # 合并顺序：pipeline.json 为底，环境变量覆盖同名键（便于 .env 指向云端 hybrid），命令行再覆盖。
+        merged = merge_defaults(load_config_file(cfg_path), defaults_from_environment())
     except json.JSONDecodeError as exc:
         print(
             f"pipeline.json 解析失败（须为标准 JSON：不要用 // 注释、勿尾随逗号）：{cfg_path}\n{exc}",

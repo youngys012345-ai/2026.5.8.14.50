@@ -1,0 +1,19 @@
+[{
+    "category": "string",
+    "subcategory": "string",
+    "score": "string",
+    "number": "boolean",
+    "content": "",
+    "standard": "",
+    "penalty": "string"
+  },
+  {
+    "category": "string",
+    "subcategory": "string",
+    "score": "string",
+    "number": "boolean",
+    "content": "",
+    "standard": "",
+    "penalty": "string"
+  }
+]

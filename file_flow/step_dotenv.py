@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-从项目根与当前工作目录加载 ``.env`` / ``环节变量.env``，写入 ``os.environ``。
+仅供 ``file_flow`` 使用：从仓库根与当前工作目录加载 ``.env`` / ``环节变量.env``。
 
-供 ``extract_pdf``、``review_standard_llm_fill``、``review_standard_field_qa`` 等在模块导入阶段调用；
-``file_flow`` 使用同目录下 ``file_flow/step_dotenv.py``（逻辑一致，避免子目录脚本依赖本文件）。
+与仓库根 ``step_dotenv.py`` 逻辑一致，但独立维护，避免 ``file_flow`` 依赖父目录同名模块。
 """
 
 from __future__ import annotations
@@ -18,21 +17,20 @@ _dotenv_unavailable = False
 
 def ensure_step_dotenv_loaded(workspace: Path | None = None) -> tuple[list[Path], bool]:
     """
-    按顺序加载环节变量（同一进程内仅实际读盘一次）：
+    同一进程内仅实际读盘一次。
 
     1. ``{workspace}/.env`` — 不覆盖操作系统已有键；
     2. ``{workspace}/环节变量.env`` — 覆盖上一步写入的同名键；
     3. ``{cwd}/.env``、``{cwd}/环节变量.env`` — 后加载者覆盖前者。
 
-    参数 ``workspace`` 缺省为与本文件同目录（仓库根）。
-
+    ``workspace`` 应传**仓库根**（含 ``pipeline.json`` 的目录）。
     返回 ``(已加载文件的绝对路径列表, 是否因未安装 python-dotenv 而跳过)``。
     """
     global _done, _loaded_paths, _dotenv_unavailable
     if _done:
         return list(_loaded_paths), _dotenv_unavailable
 
-    root = workspace if workspace is not None else Path(__file__).resolve().parent
+    root = workspace if workspace is not None else Path(__file__).resolve().parent.parent
 
     try:
         from dotenv import load_dotenv

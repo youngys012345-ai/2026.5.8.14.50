@@ -1,36 +1,57 @@
 # -*- coding: utf-8 -*-
-"""file_flow/pdf_prepare 装配逻辑单测。"""
+"""file_flow/pdf_prepare 装配逻辑单测（document_types schema）。"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
-
-from file_flow.pdf_prepare import build_work_json_from_schema_and_text
+from file_flow.pdf_prepare import build_work_json_from_schema_and_text, is_document_types_schema
 
 
-def test_build_work_json_sets_question_answer_and_content() -> None:
-    schema = {
-        "文书甲": {
-            "是否必须": "必须",
-            "字段": {
-                "栏目一": {"要求": ["a", "b"], "内容": ""},
-            },
-        }
+def _minimal_document_types_schema() -> dict:
+    return {
+        "schema_version": "1",
+        "standard_version": "1",
+        "case_type": "t",
+        "description": "root",
+        "document_types": [
+            {
+                "document_name": "文书甲",
+                "document_type": "t1",
+                "description": "doc",
+                "required": True,
+                "related_review_items": [],
+                "fields": [
+                    {
+                        "field_name": "栏目一",
+                        "description": "fd",
+                        "data_type": "string",
+                        "required": True,
+                        "related_review_items": [],
+                    }
+                ],
+            }
+        ],
+        "covered_review_items": [],
+        "required_documents": [],
+        "created_at": "",
     }
+
+
+def test_build_work_json_sets_content_and_answer_placeholders() -> None:
+    schema = _minimal_document_types_schema()
     out = build_work_json_from_schema_and_text(schema, "全文占位")
-    assert out["文书甲"]["字段"]["栏目一"]["问题"] == "a\nb"
-    assert out["文书甲"]["字段"]["栏目一"]["内容"] == "全文占位"
-    assert out["文书甲"]["字段"]["栏目一"]["回答"] == ""
+    f0 = out["document_types"][0]["fields"][0]
+    assert f0["content"] == "全文占位"
+    assert f0.get("answer") == ""
 
 
-def test_result_json_schema_loads() -> None:
-    p = Path(__file__).resolve().parent.parent / "result_json" / "评审标准.json"
+def test_schema_example_json_loads() -> None:
+    p = Path(__file__).resolve().parent.parent / "file_flow" / "out" / "schema_example.json"
     data = json.loads(p.read_text(encoding="utf-8"))
+    assert is_document_types_schema(data)
     out = build_work_json_from_schema_and_text(data, "x")
-    first_key = next(iter(out))
-    fields = out[first_key]["字段"]
-    any_field = next(iter(fields.values()))
-    assert "问题" in any_field and "回答" in any_field
+    assert "document_types" in out
+    any_field = out["document_types"][0]["fields"][0]
+    assert "content" in any_field and "answer" in any_field

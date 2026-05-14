@@ -1,5 +1,5 @@
 {
-  "__readme": "复制本文件为项目根 pipeline.json 后按需修改。键名与命令行长选项一致（连字符改为下划线）。以 __ 开头的键仅为说明，加载时会被忽略。",
+  "__readme": "复制本文件为项目根 pipeline.json 后按需修改。以 __ 开头的键为说明。合并优先级：本文件 < 环境变量（见项目根 .env.example）< 命令行。",
 
   "__输入输出": "input：PDF 文件或目录。output_dir：输出根目录；json/markdown 默认在子目录 json、markdown。json_output_dir、markdown_output_dir：可单独指定，填 null 表示使用默认子目录。",
 
@@ -30,7 +30,7 @@
   "mineru_tools_config_json": null,
   "mineru_cli_timeout_sec": null,
 
-  "__章节_OpenDataLoader": "backend=opendataloader 时须配置本节表格/ hybrid 等项；使用 MinerU 时可保留占位值或按需填写。hybrid=off 时 hybrid_url 仍可填占位；hybrid_mode、hybrid_timeout 建议仍填写（关闭 hybrid 时内部不使用）。",
+  "__章节_OpenDataLoader": "backend=opendataloader 时须配置本节。云端 Hybrid：pipeline.json 可保留 hybrid_url 为 127.0.0.1，在 .env 写 OPENDATALOADER_HYBRID_URL=http://云服务器:5002；云上须 opendataloader-pdf-hybrid --force-ocr。hybrid=off 时 hybrid_url 可占位。",
 
   "table_method": "cluster",
   "reading_order": "xycut",
@@ -40,7 +40,7 @@
   "hybrid_mode": "auto",
   "hybrid_timeout": "0",
   "hybrid_fallback": false,
-  "hybrid_health_timeout_sec": 3.0,
+  "hybrid_health_timeout_sec": 15.0,
   "skip_health_check": false,
   "hybrid_force_ocr": false,
   "hybrid_ocr_lang": "ch_sim,en",
@@ -80,5 +80,34 @@
   "__评审栏目问答": "可选。填写 review_field_qa_input 后可 python review_standard_field_qa.py；输出默认为输入文件名_answered.json。",
 
   "review_field_qa_input": null,
-  "review_field_qa_output": null
+  "review_field_qa_output": null,
+
+  "__file_flow": "可选。一键编排：python file_flow/pipeline_merge.py。file_flow_steps 可含 standards_review（读 file_flow_standards_json，写出 *_review.json）。file_flow_auto_batch=true 时批量 llm_fill、standards_review、render（优先 *_review.json）。",
+
+  "file_flow_pdf_dir": null,
+  "file_flow_schema_json": null,
+  "file_flow_out_dir": null,
+  "file_flow_llm_api_base": null,
+  "file_flow_llm_model": null,
+  "file_flow_llm_timeout_sec": null,
+  "file_flow_llm_system_prompt": null,
+  "file_flow_llm_input": null,
+  "file_flow_llm_output": null,
+  "file_flow_schema_extract_system_prompt": null,
+
+  "file_flow_steps": ["pdf_prepare", "llm_fill", "standards_review", "render_html"],
+  "file_flow_llm_extract": false,
+  "file_flow_auto_batch": false,
+  "file_flow_render_html_input": null,
+  "file_flow_render_html_output": null,
+  "file_flow_render_title": null,
+
+  "file_flow_standards_json": null,
+  "file_flow_standards_review_system_prompt": null,
+  "file_flow_review_work_input": null,
+  "file_flow_review_result_output": null,
+  "file_flow_review_attach_schema_digest": true,
+
+  "file_flow_pdf_text_backend": "pipeline",
+  "file_flow_pdf_fallback_pymupdf": true
 }

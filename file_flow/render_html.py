@@ -3,10 +3,11 @@
 """
 文件模式第三步（评测视图）：将工作/填答后的 JSON 渲染为单文件 HTML。
 
-每个栏目为左右分栏：左侧为「原文/抽取内容」，右侧为「问题」与「回答」，两侧顶部对齐，
+每个栏目为左右分栏：左侧为「原文 / content 摘录」，右侧为「评审要点」与「填答 answer」，两侧顶部对齐，
 长文随整页滚动（不在栏内做固定视口截断）。
 
-若某栏缺少「问题」，则从「要求」列表现场拼接展示；缺少「回答」时显示为「（未填答）」。
+字段左侧展示 ``content`` 摘录；右侧「评审要点」来自 ``related_review_items`` 或 ``description``；
+「填答」来自 ``answer``。缺少填答时显示「（未填答）」。
 
 用法::
 
@@ -25,35 +26,83 @@ from typing import Any
 _ROOT = Path(__file__).resolve().parent.parent
 
 
-def _requirements_to_question(reqs: Any) -> str:
-    if isinstance(reqs, list):
-        return "\n".join(str(x).strip() for x in reqs if str(x).strip())
-    if reqs is None:
-        return ""
-    return str(reqs).strip()
-
-
-def _field_question(field_obj: dict[str, Any]) -> str:
-    q = field_obj.get("问题")
-    if isinstance(q, str) and q.strip():
-        return q.strip()
-    return _requirements_to_question(field_obj.get("要求"))
+def _field_review_prompt(field_obj: dict[str, Any]) -> str:
+    items = field_obj.get("related_review_items")
+    if isinstance(items, list):
+        lines = [str(x).strip() for x in items if str(x).strip()]
+        if lines:
+            return "\n".join(lines)
+    d = field_obj.get("description")
+    if isinstance(d, str) and d.strip():
+        return d.strip()
+    if d is not None:
+        return str(d).strip()
+    return ""
 
 
 def _field_content(field_obj: dict[str, Any]) -> str:
-    c = field_obj.get("内容")
-    if isinstance(c, str):
-        return c
-    if c is None:
+    co = field_obj.get("content")
+    if isinstance(co, str):
+        return co
+    if co is None:
         return ""
-    return str(c)
+    return str(co)
 
 
 def _field_answer(field_obj: dict[str, Any]) -> str:
-    a = field_obj.get("回答")
+    a = field_obj.get("answer")
     if isinstance(a, str) and a.strip():
         return a.strip()
     return "（未填答）"
+
+
+def _html_escape_field(val: Any) -> str:
+    if val is None:
+        return ""
+    return html.escape(str(val))
+
+
+def _render_standards_review_section(data: dict[str, Any]) -> str:
+    """若有 ``standards_review``，渲染清单评审块（供最终可视化）。"""
+    sr = data.get("standards_review")
+    if not isinstance(sr, dict):
+        return ""
+    items = sr.get("items")
+    if not isinstance(items, list) or not items:
+        return ""
+    sp = sr.get("standards_path", "")
+    gen = sr.get("generated_at", "")
+    meta_bits = []
+    if sp:
+        meta_bits.append(f"标准文件：<code>{_html_escape_field(sp)}</code>")
+    if gen:
+        meta_bits.append(f"生成时间：<code>{_html_escape_field(gen)}</code>")
+    meta_html = f"<p class='sr-meta'>{' &nbsp;|&nbsp; '.join(meta_bits)}</p>" if meta_bits else ""
+
+    cards: list[str] = []
+    for idx, it in enumerate(items, start=1):
+        if not isinstance(it, dict):
+            continue
+        ra = it.get("review_answer")
+        ra_s = html.escape(str(ra).strip() if isinstance(ra, str) else (str(ra) if ra is not None else ""))
+        cards.append(
+            f"<article class='field sr-card'>"
+            f"<header class='field-head'><h4>评审清单第 {idx} 项</h4></header>"
+            f"<dl class='sr-dl'>"
+            f"<dt>category</dt><dd><pre class='pre-src'>{_html_escape_field(it.get('category'))}</pre></dd>"
+            f"<dt>subcategory</dt><dd><pre class='pre-src'>{_html_escape_field(it.get('subcategory'))}</pre></dd>"
+            f"<dt>content</dt><dd><pre class='pre-src'>{_html_escape_field(it.get('content'))}</pre></dd>"
+            f"<dt>standard</dt><dd><pre class='pre-question'>{_html_escape_field(it.get('standard'))}</pre></dd>"
+            f"<dt>score / penalty / number</dt><dd>"
+            f"{_html_escape_field(it.get('score'))} / {_html_escape_field(it.get('penalty'))} / {_html_escape_field(it.get('number'))}"
+            f"</dd>"
+            f"<dt>review_answer</dt><dd><pre class='pre-answer'>{ra_s}</pre></dd>"
+            f"</dl></article>"
+        )
+    return (
+        f"<section class='doc standards-review'><h2>按 standards 清单评审</h2>"
+        f"{meta_html}<div class='fields'>{''.join(cards)}</div></section>"
+    )
 
 
 def render_review_html(data: dict[str, Any], title: str = "案卷评审结果浏览") -> str:
@@ -67,45 +116,49 @@ def render_review_html(data: dict[str, Any], title: str = "案卷评审结果浏
         )
         blocks.append(f"<section class='meta'><h2>元信息</h2><table>{meta_rows}</table></section>")
 
-    for section_name, block in data.items():
-        if section_name.startswith("_"):
-            continue
-        if not isinstance(block, dict):
-            continue
-        must = block.get("是否必须", "")
-        must_s = html.escape(str(must)) if must else ""
-        fields_obj = block.get("字段")
-        if not isinstance(fields_obj, dict):
-            continue
-
-        field_cards: list[str] = []
-        for field_name, field_obj in fields_obj.items():
-            if not isinstance(field_obj, dict):
+    doc_types = data.get("document_types")
+    if isinstance(doc_types, list) and doc_types:
+        for doc in doc_types:
+            if not isinstance(doc, dict):
                 continue
-            fn = html.escape(str(field_name))
-            q = html.escape(_field_question(field_obj))
-            c = html.escape(_field_content(field_obj))
-            a = html.escape(_field_answer(field_obj))
-            hw = field_obj.get("是否需要识别手写体")
-            hw_note = ""
-            if hw is not None and str(hw).strip():
-                hw_note = f"<p class='hw'><strong>手写体</strong>：{html.escape(str(hw).strip())}</p>"
-            field_cards.append(
-                f"<article class='field'>"
-                f"<header class='field-head'><h4>{fn}</h4>{hw_note}</header>"
-                f"<div class='field-split'>"
-                f"<div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'>{c}</pre></div>"
-                f"<div class='col-qa'>"
-                f"<div class='qa-block'><h5>问题</h5><pre class='pre-question'>{q}</pre></div>"
-                f"<div class='qa-block qa-answer'><h5>回答</h5><pre class='pre-answer'>{a}</pre></div>"
-                f"</div></div></article>"
+            doc_title = str(doc.get("document_name") or doc.get("document_type") or "文书").strip()
+            must = doc.get("required", "")
+            must_s = html.escape(str(must)) if must not in (None, "") else ""
+            fields_list = doc.get("fields")
+            if not isinstance(fields_list, list):
+                continue
+            field_cards: list[str] = []
+            for field_obj in fields_list:
+                if not isinstance(field_obj, dict):
+                    continue
+                fn_raw = field_obj.get("field_name") or "（未命名字段）"
+                fn = html.escape(str(fn_raw))
+                q = html.escape(_field_review_prompt(field_obj))
+                c = html.escape(_field_content(field_obj))
+                a = html.escape(_field_answer(field_obj))
+                dt_note = field_obj.get("data_type")
+                dt_s = ""
+                if dt_note is not None and str(dt_note).strip():
+                    dt_s = f"<p class='hw'><strong>数据类型</strong>：{html.escape(str(dt_note).strip())}</p>"
+                field_cards.append(
+                    f"<article class='field'>"
+                    f"<header class='field-head'><h4>{fn}</h4>{dt_s}</header>"
+                    f"<div class='field-split'>"
+                    f"<div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'>{c}</pre></div>"
+                    f"<div class='col-qa'>"
+                    f"<div class='qa-block'><h5>评审要点</h5><pre class='pre-question'>{q}</pre></div>"
+                    f"<div class='qa-block qa-answer'><h5>填答</h5><pre class='pre-answer'>{a}</pre></div>"
+                    f"</div></div></article>"
+                )
+            sn = html.escape(doc_title)
+            badge = f"<span class='badge'>{must_s}</span>" if must_s else ""
+            blocks.append(
+                f"<section class='doc'><h3>{sn} {badge}</h3><div class='fields'>{''.join(field_cards)}</div></section>"
             )
 
-        sn = html.escape(str(section_name))
-        badge = f"<span class='badge'>{must_s}</span>" if must_s else ""
-        blocks.append(
-            f"<section class='doc'><h3>{sn} {badge}</h3><div class='fields'>{''.join(field_cards)}</div></section>"
-        )
+    sr_html = _render_standards_review_section(data)
+    if sr_html:
+        blocks.append(sr_html)
 
     body = "\n".join(blocks)
     esc_title = html.escape(title)
@@ -169,6 +222,12 @@ def render_review_html(data: dict[str, Any], title: str = "案卷评审结果浏
       border: 1px solid #86efac;
     }}
     p.hw {{ margin: 0.35rem 0 0 0; font-size: 0.85rem; color: #92400e; }}
+    section.standards-review h2 {{ font-size: 1.05rem; color: #0f766e; margin-bottom: 0.5rem; }}
+    p.sr-meta {{ font-size: 0.85rem; color: #475569; margin: 0 0 0.75rem 0; }}
+    dl.sr-dl {{ margin: 0; display: grid; grid-template-columns: 8rem 1fr; gap: 0.35rem 0.75rem; font-size: 0.88rem; }}
+    dl.sr-dl dt {{ color: #64748b; font-weight: 600; }}
+    dl.sr-dl dd {{ margin: 0; min-width: 0; }}
+    .sr-card pre.pre-src {{ background: #fff; border: 1px solid #e2e8f0; white-space: pre-wrap; word-break: break-word; padding: 0.45rem 0.55rem; border-radius: 6px; }}
   </style>
 </head>
 <body>
@@ -179,25 +238,57 @@ def render_review_html(data: dict[str, Any], title: str = "案卷评审结果浏
 """
 
 
-def _resolve_path(raw: Path, cwd: Path) -> Path:
+def _resolve_path(raw: Path, cwd: Path, workspace: Path) -> Path:
     if raw.is_absolute():
         return raw.resolve()
-    for base in (cwd, _ROOT):
+    for base in (cwd, workspace):
         hit = (base / raw).resolve()
         if hit.is_file():
             return hit
-    return (_ROOT / raw).resolve()
+    return (workspace / raw).resolve()
 
 
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="将评审 JSON 渲染为静态 HTML")
-    ap.add_argument("-i", "--input", type=Path, required=True, help="工作 JSON 或 *_answered.json")
-    ap.add_argument("-o", "--output", type=Path, required=True, help="输出 .html 路径")
-    ap.add_argument("--title", default="案卷评审结果浏览", help="页面标题")
-    ns = ap.parse_args(argv)
-    in_path = _resolve_path(ns.input, Path.cwd())
-    out_path = Path(ns.output)
-    out_path = out_path.resolve() if out_path.is_absolute() else (Path.cwd() / out_path).resolve()
+def run_render_html(
+    merged: dict[str, Any],
+    *,
+    workspace: Path,
+    cwd: Path,
+    input_path: Path | None = None,
+    output_path: Path | None = None,
+    title: str | None = None,
+) -> int:
+    """可编程入口：JSON → HTML。"""
+    in_raw = input_path
+    if in_raw is None:
+        for key in ("file_flow_render_html_input", "file_flow_review_result_output", "file_flow_llm_output"):
+            v = merged.get(key)
+            if isinstance(v, str) and v.strip():
+                in_raw = Path(v.strip())
+                break
+    if in_raw is None:
+        print(
+            "错误: 未指定 render 输入，请设 file_flow_render_html_input / file_flow_review_result_output / file_flow_llm_output",
+            file=sys.stderr,
+        )
+        return 1
+
+    out_raw = output_path
+    if out_raw is None:
+        mo = merged.get("file_flow_render_html_output")
+        if isinstance(mo, str) and mo.strip():
+            out_raw = Path(mo.strip())
+        else:
+            p = Path(in_raw)
+            out_raw = p.with_suffix(".html")
+
+    title_s = title
+    if title_s is None:
+        t = merged.get("file_flow_render_title")
+        title_s = str(t).strip() if isinstance(t, str) and t.strip() else "案卷评审结果浏览"
+
+    in_path = _resolve_path(Path(in_raw), cwd, workspace)
+    out_path = Path(out_raw)
+    out_path = out_path.resolve() if out_path.is_absolute() else (cwd / out_path).resolve()
 
     if not in_path.is_file():
         print(f"错误: 找不到输入: {in_path}", file=sys.stderr)
@@ -212,10 +303,25 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    html_doc = render_review_html(data, title=ns.title)
-    out_path.write_text(html_doc, encoding="utf-8")
+    out_path.write_text(render_review_html(data, title=title_s), encoding="utf-8")
     print(f"已写出: {out_path}")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="将评审 JSON 渲染为静态 HTML")
+    ap.add_argument("-i", "--input", type=Path, required=True, help="*_review.json、*_answered.json 或 *_work.json")
+    ap.add_argument("-o", "--output", type=Path, required=True, help="输出 .html 路径")
+    ap.add_argument("--title", default="案卷评审结果浏览", help="页面标题")
+    ns = ap.parse_args(argv)
+    return run_render_html(
+        {},
+        workspace=_ROOT,
+        cwd=Path.cwd(),
+        input_path=ns.input,
+        output_path=ns.output,
+        title=ns.title if ns.title else None,
+    )
 
 
 if __name__ == "__main__":

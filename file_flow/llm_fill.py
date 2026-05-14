@@ -1,27 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-文件模式第二步：读取 pdf_prepare 生成的工作 JSON，将「文书类型 + 栏目 + 内容 + 问题」拼成用户消息，
-与系统提示一并调用大模型，把返回写入该栏目的「回答」。
+文件模式第二步：读取工作 JSON（``document_types`` / ``fields`` 结构，与 ``schema_example.json`` 一致），
+将文书名、字段名、``content`` 摘录与评审要点拼成用户消息，调用大模型，将回复写入字段对象下的 ``answer``。
 
-环境变量（与 ``review_standard_field_qa`` / ``review_standard_llm_fill`` 一致，由项目根 ``.env`` 注入）::
+**仅依赖**仓库根的 ``pipeline_config.py`` + ``pipeline.json``（可选 ``--config``）以及本目录下的
+``llm_openai.py``、``pipeline_merge.py``、``step_dotenv.py``。
 
-    LLM_API_BASE   完整 Chat Completions POST URL
-    LLM_API_KEY、LLM_API_KEY_BACKUP1、LLM_API_KEY_BACKUP2（备用；429/503 时由 ``call_openai_compatible_chat`` 轮询换钥重试）
-    LLM_MODEL
+评审要点优先取 ``related_review_items``（列表多行拼接）；若无则使用 ``description``。
 
-本脚本位于 ``file_flow/`` 下，仍通过 ``ensure_step_dotenv_loaded(项目根)`` 加载**仓库根目录**的 ``.env`` /
-``环节变量.env``（与 ``step_dotenv`` 约定一致），不依赖当前工作目录是否在子文件夹。
-
-系统提示优先顺序：``FILE_FLOW_SYSTEM_PROMPT`` → ``REVIEW_FIELD_QA_SYSTEM_PROMPT`` → 内置默认。
-
-日志：``REVIEW_STANDARD_LLM_LOG_LEVEL``；非 dry-run 时首条请求会打印 system / user / 助手回复（过长截断，与 field_qa 一致）。
+``-i`` / ``-o`` 可省略：此时使用 ``pipeline.json`` 的 ``file_flow_llm_input``、``file_flow_llm_output``。
 
 用法::
 
     python file_flow/llm_fill.py -i file_flow/out/某案_work.json -o file_flow/out/某案_answered.json
-    python file_flow/llm_fill.py -i ... --dry-run
-    python file_flow/llm_fill.py -i ... -o ... --log-file logs/llm_fill.log
+    python file_flow/llm_fill.py --config pipeline.json
+    python file_flow/llm_fill.py --dry-run -i ... -o ...
 """
 
 from __future__ import annotations
@@ -29,9 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -39,66 +31,59 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from step_dotenv import ensure_step_dotenv_loaded  # noqa: E402
-
-ensure_step_dotenv_loaded(_ROOT)
-
-from review_standard_llm_fill import (  # noqa: E402
+from file_flow.llm_openai import (  # noqa: E402
     LlmEnvConfig,
     call_openai_compatible_chat,
     configure_logging,
-    iter_top_level_sections,
-    load_llm_config_from_env,
+    is_http_endpoint_url,
+    load_llm_config_for_file_flow,
 )
-from vlm_client import is_http_endpoint_url  # noqa: E402
+from file_flow.pipeline_merge import load_merged_pipeline_config  # noqa: E402
+from file_flow.step_dotenv import ensure_step_dotenv_loaded  # noqa: E402
+
+ensure_step_dotenv_loaded(_ROOT)
 
 _LOG = logging.getLogger(__name__)
 
-# 首条 LLM 请求/响应写入日志时的单段最大字符数（与 review_standard_field_qa 一致）
 _FIRST_LLM_LOG_MAX_CHARS = 20000
 
 
 def _preview_for_log(text: str, max_chars: int = _FIRST_LLM_LOG_MAX_CHARS) -> str:
-    """用于日志的正文预览；超长时截断并注明总长度。"""
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + f"\n…（共 {len(text)} 字符，已按 max={max_chars} 截断）"
 
 
-# 可用 FILE_FLOW_SYSTEM_PROMPT 或 REVIEW_FIELD_QA_SYSTEM_PROMPT 覆盖
-DEFAULT_SYSTEM = (
-    "你是行政执法案卷评审助手。用户会提供某一栏目从案卷中抽取的相关文字、以及需要对照的评审问题。"
-    "请严格依据「抽取内容」作答：先给出简要结论，再说明依据；不得臆测材料中不存在的内容。"
-    "若材料不足以判断，须明确说明「无法判断」并简述原因。使用简体中文。"
-)
+def _field_review_prompt(field_obj: dict[str, Any]) -> str:
+    """评审/问答用说明：``related_review_items`` 优先，否则 ``description``。"""
+    items = field_obj.get("related_review_items")
+    if isinstance(items, list):
+        lines = [str(x).strip() for x in items if str(x).strip()]
+        if lines:
+            return "\n".join(lines)
+    d = field_obj.get("description")
+    if isinstance(d, str) and d.strip():
+        return d.strip()
+    if d is not None:
+        return str(d).strip()
+    return ""
 
 
-def _env_first(*names: str) -> str | None:
-    for n in names:
-        v = os.environ.get(n)
-        if v is not None and str(v).strip() != "":
-            return str(v).strip()
-    return None
-
-
-def load_qa_llm_config() -> LlmEnvConfig:
-    base = load_llm_config_from_env()
-    sys_prompt = (
-        _env_first("FILE_FLOW_SYSTEM_PROMPT", "REVIEW_FIELD_QA_SYSTEM_PROMPT") or DEFAULT_SYSTEM
-    )
-    return replace(base, system_prompt=sys_prompt)
-
-
-def build_user_prompt(section_title: str, field_name: str, content: str, question: str) -> str:
-    """拼接用户消息：栏目材料 + 评审问题。"""
-    c = content.strip() if content else "（抽取内容为空）"
-    q = question.strip() if question else "（未配置问题，请结合材料作一般性说明）"
+def build_user_prompt(
+    document_name: str,
+    field_name: str,
+    extracted_content: str,
+    review_prompt: str,
+) -> str:
+    """拼接用户消息：摘录 + 评审要点。"""
+    c = extracted_content.strip() if extracted_content else "（抽取内容为空）"
+    q = review_prompt.strip() if review_prompt else "（未配置 related_review_items / description，请结合摘录作一般性说明）"
     return (
-        f"【文书类型】{section_title}\n\n"
-        f"【栏目名称】{field_name}\n\n"
+        f"【文书名称】{document_name}\n\n"
+        f"【字段名称】{field_name}\n\n"
         f"【与案卷相关的抽取内容】\n{c}\n\n"
-        f"【评审问题】\n{q}\n\n"
-        "请根据「抽取内容」回答「评审问题」。若内容与问题无关，请说明。"
+        f"【评审要点】\n{q}\n\n"
+        "请根据「抽取内容」对照「评审要点」作答。若内容与要点无关，请说明。"
     )
 
 
@@ -108,61 +93,67 @@ def fill_answers(
     *,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """遍历各文书「字段」，写入「回答」。"""
+    """遍历 ``document_types`` → ``fields``，写入 ``answer``。"""
     out: dict[str, Any] = json.loads(json.dumps(root, ensure_ascii=False))
     meta = out.pop("_file_flow_meta", None)
 
+    doc_types = out.get("document_types")
+    if not isinstance(doc_types, list) or not doc_types:
+        _LOG.warning("[环节:跳过] 根节点缺少非空 document_types，未执行填答")
+        if isinstance(meta, dict):
+            out["_file_flow_meta"] = meta
+        return out
+
     total_calls = 0
-    for section_title, block in iter_top_level_sections(out):
-        if section_title.startswith("_"):
+    for doc in doc_types:
+        if not isinstance(doc, dict):
             continue
-        fields_obj = block.get("字段")
-        if not isinstance(fields_obj, dict):
+        fields = doc.get("fields")
+        if not isinstance(fields, list):
             continue
-        total_calls += sum(1 for _fn, fo in fields_obj.items() if isinstance(fo, dict))
+        total_calls += sum(1 for fo in fields if isinstance(fo, dict))
 
-    _LOG.info("[环节:栏目标注] 预计调用次数=%s（每个子字段一次）", total_calls)
+    _LOG.info("[环节:栏目标注] 预计调用次数=%s（每个 field 一次）", total_calls)
 
-    # 仅首条真实请求打印 system + user；仅首次成功返回打印助手正文（与 review_standard_field_qa 一致）
     first_llm_request_logged = False
     first_llm_response_logged = False
 
     done = 0
-    for section_title, block in iter_top_level_sections(out):
-        if section_title.startswith("_"):
+    for doc in doc_types:
+        if not isinstance(doc, dict):
             continue
-        fields_obj = block.get("字段")
-        if not isinstance(fields_obj, dict):
-            _LOG.warning("[环节:跳过] 文书「%s」无「字段」对象", section_title)
+        doc_name = str(doc.get("document_name", "")).strip() or "（未命名文书）"
+        fields = doc.get("fields")
+        if not isinstance(fields, list):
+            _LOG.warning("[环节:跳过] 文书「%s」缺少 fields 数组", doc_name)
             continue
 
-        for field_name, field_obj in fields_obj.items():
+        for field_obj in fields:
             if not isinstance(field_obj, dict):
                 continue
+            field_name = str(field_obj.get("field_name", "")).strip() or "（未命名字段）"
             done += 1
-            content = field_obj.get("内容", "")
+            content = field_obj.get("content", "")
             if not isinstance(content, str):
                 content = str(content)
-            question = field_obj.get("问题", "")
-            if not isinstance(question, str):
-                question = str(question)
+            review = _field_review_prompt(field_obj)
             if not content.strip():
                 _LOG.warning(
-                    "[环节:上下文为空] 文书「%s」栏目「%s」抽取内容为空，仍将仅按问题尝试作答",
-                    section_title,
+                    "[环节:上下文为空] 文书「%s」字段「%s」content 为空，仍将仅按评审要点尝试作答",
+                    doc_name,
                     field_name,
                 )
-            user = build_user_prompt(section_title, field_name, content, question)
+            user = build_user_prompt(doc_name, field_name, content, review)
             _LOG.info(
-                "[环节:栏目] (%s/%s) 文书=%s 栏目=%s 用户消息字符数=%s",
+                "[环节:栏目] (%s/%s) 文书=%s 字段=%s 用户消息字符数=%s",
                 done,
                 total_calls,
-                section_title,
+                doc_name,
                 field_name,
                 len(user),
             )
             if dry_run:
-                field_obj["回答"] = "[dry-run 未调用大模型]"
+                field_obj["answer"] = "[dry-run 未调用大模型]"
                 continue
             if not first_llm_request_logged:
                 _LOG.info(
@@ -184,7 +175,7 @@ def fill_answers(
                     _preview_for_log(text),
                 )
                 first_llm_response_logged = True
-            field_obj["回答"] = text
+            field_obj["answer"] = text
 
     if isinstance(meta, dict):
         out["_file_flow_meta"] = meta
@@ -201,11 +192,98 @@ def _resolve_path(raw: Path, cwd: Path) -> Path:
     return (_ROOT / raw).resolve()
 
 
+def run_llm_fill(
+    merged: dict[str, Any],
+    *,
+    workspace: Path,
+    cwd: Path,
+    input_path: Path | None = None,
+    output_path: Path | None = None,
+    dry_run: bool = False,
+    log_level: str | None = None,
+    log_file: Path | None = None,
+) -> int:
+    """可编程入口：对工作 JSON 填答 ``answer``。"""
+    configure_logging(level=log_level, log_file=log_file)
+
+    in_raw = input_path
+    if in_raw is None:
+        mi = merged.get("file_flow_llm_input")
+        if not isinstance(mi, str) or not mi.strip():
+            print("错误: 未指定 input_path，或在 pipeline.json 中设置 file_flow_llm_input", file=sys.stderr)
+            return 1
+        in_raw = Path(mi.strip())
+    out_raw = output_path
+    if out_raw is None:
+        mo = merged.get("file_flow_llm_output")
+        if not isinstance(mo, str) or not mo.strip():
+            print("错误: 未指定 output_path，或在 pipeline.json 中设置 file_flow_llm_output", file=sys.stderr)
+            return 1
+        out_raw = Path(mo.strip())
+
+    in_path = _resolve_path(Path(in_raw), cwd)
+    out_path = Path(out_raw)
+    out_path = out_path.resolve() if out_path.is_absolute() else (cwd / out_path).resolve()
+
+    if not in_path.is_file():
+        print(f"错误: 找不到输入: {in_path}", file=sys.stderr)
+        return 1
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        data = json.loads(in_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"错误: 无法读取或解析 JSON: {e}", file=sys.stderr)
+        return 1
+    if not isinstance(data, dict):
+        print("错误: JSON 根须为对象", file=sys.stderr)
+        return 1
+
+    cfg = load_llm_config_for_file_flow(merged)
+    dry = dry_run
+    if not dry and (
+        not cfg.api_base
+        or not cfg.model
+        or not is_http_endpoint_url((cfg.api_base or "").strip())
+    ):
+        _LOG.warning(
+            "[环节:配置] 缺少有效的 LLM API URL（http(s) 完整 POST）或 LLM_MODEL，自动 dry-run"
+        )
+        print(
+            "警告: 未配置完整的大模型 endpoint URL 或模型名，仅执行 dry-run。",
+            file=sys.stderr,
+        )
+        dry = True
+
+    try:
+        filled = fill_answers(data, cfg, dry_run=dry)
+    except RuntimeError as e:
+        _LOG.exception("[环节:失败] %s", e)
+        return 1
+
+    out_path.write_text(json.dumps(filled, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _LOG.info("[环节:写文件] path=%s", out_path.resolve())
+    print(f"已写出: {out_path.resolve()}")
+    return 0
+
+
+def _resolve_pipeline_cli(cfg_arg: Path | None) -> Path | None:
+    from file_flow.pipeline_merge import repo_root, resolve_pipeline_disk_path  # noqa: PLC0415
+
+    return resolve_pipeline_disk_path(repo_root(), cfg_arg)
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="工作 JSON 栏目级大模型填答（文件模式）")
-    ap.add_argument("-i", "--input", type=Path, required=True, help="*_work.json 或已装配的 JSON")
-    ap.add_argument("-o", "--output", type=Path, required=True, help="写出路径，如 *_answered.json")
-    ap.add_argument("--dry-run", action="store_true", help="不请求 API，回答写占位句")
+    ap = argparse.ArgumentParser(description="工作 JSON 字段级大模型填答（document_types schema）")
+    ap.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="管线 JSON；默认优先 file_flow/pipeline.json",
+    )
+    ap.add_argument("-i", "--input", type=Path, default=None, help="*_work.json；可改用 pipeline 的 file_flow_llm_input")
+    ap.add_argument("-o", "--output", type=Path, default=None, help="写出路径；可改用 pipeline 的 file_flow_llm_output")
+    ap.add_argument("--dry-run", action="store_true", help="不请求 API，answer 写占位句")
     ap.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
@@ -229,50 +307,19 @@ def main(argv: list[str] | None = None) -> int:
     elif env_loaded:
         _LOG.info("[环节:环境] 已加载环节变量文件 %s 个", len(env_loaded))
 
-    in_path = _resolve_path(ns.input, Path.cwd())
-    out_path = Path(ns.output)
-    out_path = out_path.resolve() if out_path.is_absolute() else (Path.cwd() / out_path).resolve()
+    cfg_disk = _resolve_pipeline_cli(ns.config)
+    merged = load_merged_pipeline_config(cfg_disk if cfg_disk is not None and cfg_disk.is_file() else None)
 
-    if not in_path.is_file():
-        print(f"错误: 找不到输入: {in_path}", file=sys.stderr)
-        return 1
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        data = json.loads(in_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        print(f"错误: 无法读取或解析 JSON: {e}", file=sys.stderr)
-        return 1
-    if not isinstance(data, dict):
-        print("错误: JSON 根须为对象", file=sys.stderr)
-        return 1
-
-    cfg = load_qa_llm_config()
-    dry_run = ns.dry_run
-    if not dry_run and (
-        not cfg.api_base
-        or not cfg.model
-        or not is_http_endpoint_url((cfg.api_base or "").strip())
-    ):
-        _LOG.warning(
-            "[环节:配置] 缺少有效的 LLM_API_BASE（须为完整 http(s) URL）或 LLM_MODEL，自动 dry-run"
-        )
-        print(
-            "警告: 未配置完整的大模型 endpoint URL 或模型名，仅执行 dry-run。",
-            file=sys.stderr,
-        )
-        dry_run = True
-
-    try:
-        filled = fill_answers(data, cfg, dry_run=dry_run)
-    except RuntimeError as e:
-        _LOG.exception("[环节:失败] %s", e)
-        return 1
-
-    out_path.write_text(json.dumps(filled, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    _LOG.info("[环节:写文件] path=%s", out_path.resolve())
-    print(f"已写出: {out_path.resolve()}")
-    return 0
+    return run_llm_fill(
+        merged,
+        workspace=_ROOT,
+        cwd=Path.cwd(),
+        input_path=ns.input,
+        output_path=ns.output,
+        dry_run=ns.dry_run,
+        log_level=ns.log_level,
+        log_file=ns.log_file,
+    )
 
 
 if __name__ == "__main__":

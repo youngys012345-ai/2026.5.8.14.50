@@ -93,3 +93,15 @@ def test_defaults_from_environment_with_mineru_keys(monkeypatch) -> None:
     assert data["mineru_model_source"] == "local"
     assert data["mineru_tools_config_json"] == "config/mineru.local.json"
     assert data["mineru_project_root"] == "D:\\MinerU"
+
+
+def test_merge_file_then_env_overrides_hybrid_url(tmp_path: Path, monkeypatch) -> None:
+    """与 extract_pdf / file_flow 一致：环境变量覆盖 pipeline.json 中的 hybrid_url。"""
+    monkeypatch.setenv("OPENDATALOADER_HYBRID_URL", "http://cloud.example:5002")
+    path = tmp_path / "pipeline.json"
+    path.write_text(
+        json.dumps({"hybrid_url": "http://127.0.0.1:5002"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    merged = merge_defaults(load_config_file(path), defaults_from_environment())
+    assert merged["hybrid_url"] == "http://cloud.example:5002"

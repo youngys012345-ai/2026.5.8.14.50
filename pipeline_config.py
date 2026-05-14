@@ -3,8 +3,8 @@
 """
 抽取管线配置：环境变量 + JSON 文件合并，供 extract_pdf 等脚本复用。
 
-合并优先级（后者覆盖前者）：环境变量 → pipeline.json → 命令行参数。
-业务默认值应写在项目根的 pipeline.json（或 --config 指定的文件）中，不在 Python 代码里写死。
+合并优先级（后者覆盖同名键）：pipeline.json → 环境变量（OPENDATALOADER_* 等）→ 命令行参数。
+业务默认值写在 pipeline.json；部署相关覆盖（如云端 hybrid URL）放在 .env / 环境变量。
 
 未设置 ``OPENDATALOADER_VLM_*`` 时，VLM 的 ``vlm_api_base`` 可从 ``LLM_API_BASE`` 读取（须为完整
 ``http(s)`` Chat Completions POST URL，与评审脚本一致）；``LLM_MODEL``、``LLM_API_KEY`` 分别映射到
@@ -69,6 +69,31 @@ CONFIG_KEYS = frozenset(
         # 评审栏目问答（review_standard_field_qa.py）
         "review_field_qa_input",
         "review_field_qa_output",
+        # file_flow（仅依赖本仓库 pipeline.json + 本模块）
+        "file_flow_pdf_dir",
+        "file_flow_schema_json",
+        "file_flow_out_dir",
+        "file_flow_llm_api_base",
+        "file_flow_llm_model",
+        "file_flow_llm_timeout_sec",
+        "file_flow_llm_system_prompt",
+        "file_flow_llm_input",
+        "file_flow_llm_output",
+        "file_flow_schema_extract_system_prompt",
+        "file_flow_steps",
+        "file_flow_llm_extract",
+        "file_flow_auto_batch",
+        "file_flow_render_html_input",
+        "file_flow_render_html_output",
+        "file_flow_render_title",
+        # file_flow：按 standards 清单评审（standards_llm_review.py）
+        "file_flow_standards_json",
+        "file_flow_standards_review_system_prompt",
+        "file_flow_review_work_input",
+        "file_flow_review_result_output",
+        "file_flow_review_attach_schema_digest",
+        "file_flow_pdf_text_backend",
+        "file_flow_pdf_fallback_pymupdf",
     }
 )
 

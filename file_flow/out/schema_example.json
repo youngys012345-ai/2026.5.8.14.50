@@ -1,0 +1,55 @@
+{
+    "schema_version": "xxx",
+    "standard_version": "xxx",
+    "case_type": "xxx",
+    "description": "xxx",
+    "document_types": [
+      {
+        "document_name": "string",
+        "document_type": "string",
+        "description": "string",
+        "required": "boolean",
+        "related_review_items": [
+          "string"
+        ],
+        "fields": [
+          {
+            "field_name": "string",
+            "description": "string",
+            "data_type": "string",
+            "required": "boolean",
+            "related_review_items": [
+              "string"
+            ]
+          }
+        ]
+      },
+      {
+        "document_name": "string",
+        "document_type": "string",
+        "description": "string",
+        "required": "boolean",
+        "related_review_items": [
+          "string"
+        ],
+        "fields": [
+          {
+            "field_name": "string",
+            "description": "string",
+            "data_type": "string",
+            "required": "boolean",
+            "related_review_items": [
+              "string"
+            ]
+          }
+        ]
+      }
+    ],
+    "covered_review_items": [
+      "string"
+    ],
+    "required_documents": [
+      "string"
+    ],
+    "created_at": "string"
+  }
