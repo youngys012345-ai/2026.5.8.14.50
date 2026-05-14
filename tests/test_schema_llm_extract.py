@@ -14,7 +14,16 @@ from file_flow.schema_llm_extract import (
 )
 
 
-def test_summarize_schema_user_prompt_structure_only() -> None:
+def test_fulltext_path_for_work_json_matches_pdf_prepare_convention() -> None:
+    from pathlib import Path
+
+    from file_flow.schema_llm_extract import fulltext_path_for_work_json
+
+    merged: dict = {}
+    p = Path("out/示例案卷_work.json")
+    assert fulltext_path_for_work_json(p, merged) == Path("out/示例案卷_fulltext.txt")
+
+
     pub = build_public_context("甲文书", "文书说明一行")
     u = build_field_extract_user_prompt(pub, "案由", "填写案由", "X" * 5000)
     s = summarize_schema_extract_user_prompt_for_log(u)

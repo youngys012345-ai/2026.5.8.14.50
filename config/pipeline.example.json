@@ -82,7 +82,7 @@
   "review_field_qa_input": null,
   "review_field_qa_output": null,
 
-  "__file_flow": "可选。在仓库根执行 python -m file_flow.pipeline_merge；默认读 file_flow/pipeline.json。未写 file_flow_auto_batch 时编排侧默认为 true。file_flow_suffix_* 控制 *_work / *_answered / *_review 等后缀名；当前默认流程为 pdf_prepare → standards_review → render_html（不再含字段级 llm_fill）。",
+  "__file_flow": "可选。在仓库根执行 python -m file_flow.pipeline_merge；默认读 file_flow/pipeline.json。未写 file_flow_auto_batch 时编排侧默认为 true。file_flow_suffix_* 控制 *_work / *_answered / *_review 等后缀名。默认步骤：pdf_prepare → schema_llm_extract（按 schema 写 content）→ standards_review → render_html。",
 
   "file_flow_pdf_dir": null,
   "file_flow_schema_json": null,
@@ -98,7 +98,7 @@
   "file_flow_llm_output": null,
   "file_flow_schema_extract_system_prompt": null,
 
-  "file_flow_steps": ["pdf_prepare", "standards_review", "render_html"],
+  "file_flow_steps": ["pdf_prepare", "schema_llm_extract", "standards_review", "render_html"],
   "file_flow_llm_extract": true,
   "file_flow_auto_batch": true,
   "file_flow_render_html_input": null,
@@ -108,6 +108,7 @@
   "file_flow_standards_json": null,
   "file_flow_standards_review_system_prompt": null,
   "file_flow_review_work_input": null,
+  "file_flow_schema_extract_work_input": null,
   "file_flow_review_result_output": null,
   "file_flow_review_attach_schema_digest": true,
   "file_flow_review_attach_work_json": null,

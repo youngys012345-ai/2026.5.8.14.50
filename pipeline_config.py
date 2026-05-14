@@ -90,6 +90,7 @@ CONFIG_KEYS = frozenset(
         "file_flow_standards_json",
         "file_flow_standards_review_system_prompt",
         "file_flow_review_work_input",
+        "file_flow_schema_extract_work_input",
         "file_flow_review_result_output",
         "file_flow_review_attach_schema_digest",
         "file_flow_review_attach_work_json",

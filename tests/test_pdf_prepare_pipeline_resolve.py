@@ -56,7 +56,18 @@ def test_pymupdf_mode_extracts_text(tmp_path: Path) -> None:
     assert meta.get("pdf_text_backend") == "pymupdf"
 
 
-def test_mineru_backend_uses_pymupdf_with_meta(tmp_path: Path) -> None:
+def test_default_file_flow_steps_include_schema_llm_extract() -> None:
+    from file_flow.pipeline_merge import DEFAULT_FILE_FLOW_STEPS, parse_file_flow_steps
+
+    assert tuple(DEFAULT_FILE_FLOW_STEPS) == (
+        "pdf_prepare",
+        "schema_llm_extract",
+        "standards_review",
+        "render_html",
+    )
+    assert parse_file_flow_steps({}) == list(DEFAULT_FILE_FLOW_STEPS)
+
+
     try:
         import fitz
     except ImportError:

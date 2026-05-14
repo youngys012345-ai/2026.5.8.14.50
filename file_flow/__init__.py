@@ -7,14 +7,16 @@ file_flow 包内模块分工（建议阅读顺序）：
 
 **第一步：装配工作 JSON（``pdf_prepare``）**
     读 PDF 目录 + ``schema`` → 写出 ``*_work.json`` + 同目录 ``*_fulltext.txt``。
-    若 ``file_flow_llm_extract=true``，在本步内调用 ``schema_llm_extract``：**仅**按 field_name + description
-    从全文摘录写入各字段 ``content``（不引入 ``standards``）。
+    若 ``file_flow_steps`` 中含独立步骤 ``schema_llm_extract``，本步**仅**骨架与全文，大模型摘录在下一步；
+    否则在 ``file_flow_llm_extract=true`` 时于本步内联调用 ``schema_llm_extract`` 写各字段 ``content``。
 
-**第二步：清单级评审（``standards_llm_review``）**
-    按 ``standards.json`` 每条（category / subcategory / … + standard），将**整份**已填 ``content`` 的工作 JSON
-    嵌入每条请求的 user 正文，调用大模型（先是否符合、再简短依据），写入 ``standards_review``。
+**第二步：schema 大模型摘录（``schema_llm_extract``）**
+    读 ``*_work.json`` 与 ``{{案卷名}}_fulltext.txt``，按 field_name + description 写 ``content``（不读 ``standards``）。
 
-**第三步：可视化**
+**第三步：清单级评审（``standards_llm_review``）**
+    按 ``standards.json`` 每条，将整份工作 JSON 嵌入请求，对照 ``standard`` 作答，写入 ``standards_review``。
+
+**第四步：可视化**
     ``render_html`` 等；另有 ``document_export`` 等辅助模块。
 
 **编排与配置**

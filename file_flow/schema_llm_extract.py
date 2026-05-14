@@ -7,6 +7,9 @@
 **本环节只做「从 PDF 正文按 schema 索引做信息摘录」**，不读取 ``standards.json``、不在 user 消息中拼接
 任何「评审问题 / standard」。清单级评审见 ``standards_llm_review``（读取已填 ``content`` 的整份工作 JSON）。
 
+可由 ``pdf_prepare`` 在 ``file_flow_llm_extract=true`` 且步骤列表**不含** ``schema_llm_extract`` 时**内联**调用；
+也可作为 ``pipeline_merge`` 的独立步骤 ``schema_llm_extract`` 运行（见 ``run_schema_llm_extract``、``python -m file_flow.schema_llm_extract``）。
+
 1. **公共上下文**：每项文书将 ``document_name`` 与文书级 ``description`` 拼成固定前缀。
 2. **逐字段一次调用**：每条字段仅依据 **字段名称（field_name）** 与 **字段说明（description）** 作为抽取目标，
    与全文一并交给模型；**不**使用 ``case_sources`` / ``related_review_items`` 等扩展分支。
@@ -21,10 +24,13 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
+import sys
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from .llm_openai import (
@@ -33,6 +39,8 @@ from .llm_openai import (
 )
 
 _LOG = logging.getLogger(__name__)
+
+_FILE_FLOW_DIR = Path(__file__).resolve().parent
 
 
 def _log_clip(s: str, max_chars: int = 200) -> str:
@@ -272,3 +280,180 @@ def enrich_work_json_with_llm_schema_extract(
                 field["content"] = parse_llm_plain_excerpt(raw_reply)
 
     return out
+
+
+def fulltext_path_for_work_json(work_path: Path, merged: dict[str, Any]) -> Path:
+    """
+    与 ``pdf_prepare`` 约定一致：若工作文件为 ``{{案卷名}}{{suffix_work}}.json``，
+    则全文为同目录 ``{{案卷名}}_fulltext.txt``。
+    """
+    from .naming import stem_base_from_stage_stem
+
+    base = stem_base_from_stage_stem(work_path.stem, merged)
+    return work_path.parent / f"{base}_fulltext.txt"
+
+
+def _resolve_disk_path(raw: Path, cwd: Path, workspace: Path | None = None) -> Path:
+    if raw.is_absolute():
+        return raw.resolve()
+    bases: list[Path] = [cwd, _FILE_FLOW_DIR]
+    if workspace is not None:
+        bases.insert(0, workspace)
+    for base in bases:
+        hit = (base / raw).resolve()
+        if hit.is_file():
+            return hit
+    return (_FILE_FLOW_DIR / raw).resolve()
+
+
+def run_schema_llm_extract(
+    merged: dict[str, Any],
+    *,
+    workspace: Path,
+    cwd: Path,
+    work_input: Path | None = None,
+    output_path: Path | None = None,
+    dry_run: bool = False,
+    log_level: str | None = None,
+    log_file: Path | None = None,
+) -> int:
+    """
+    对已存在的 ``*_work.json`` 与同目录 ``*_fulltext.txt`` 调用大模型，按 schema 写入各字段 ``content``。
+
+    供管线步骤 ``schema_llm_extract`` 使用；与 ``pdf_prepare`` 内联摘录二选一（由 ``pipeline_merge`` 控制）。
+    ``file_flow_llm_extract`` 为关时直接返回 0（不写回、不调 API）。
+    """
+    from .llm_openai import build_llm_env_config, configure_logging, is_http_endpoint_url
+    from .pdf_prepare import resolve_llm_extract_enabled
+
+    configure_logging(level=log_level, log_file=log_file)
+
+    if not resolve_llm_extract_enabled(merged, None):
+        _LOG.info("[环节:schema_llm_extract] file_flow_llm_extract 已关闭，跳过")
+        return 0
+
+    in_raw = work_input
+    if in_raw is None:
+        v = merged.get("file_flow_schema_extract_work_input")
+        if isinstance(v, str) and v.strip():
+            in_raw = Path(v.strip())
+    if in_raw is None:
+        print(
+            "错误: 未指定工作 JSON，请设置 file_flow_schema_extract_work_input 或使用 -i/--work-input",
+            file=sys.stderr,
+        )
+        return 1
+
+    work_path = _resolve_disk_path(Path(in_raw), cwd, workspace)
+    if not work_path.is_file():
+        print(f"错误: 找不到工作 JSON: {work_path}", file=sys.stderr)
+        return 1
+
+    ft_path = fulltext_path_for_work_json(work_path, merged)
+    if not ft_path.is_file():
+        print(f"错误: 找不到全文文件（应与 work 同目录）: {ft_path}", file=sys.stderr)
+        return 1
+
+    try:
+        work = json.loads(work_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"错误: 无法解析工作 JSON: {e}", file=sys.stderr)
+        return 1
+    if not isinstance(work, dict):
+        print("错误: 工作 JSON 根须为对象", file=sys.stderr)
+        return 1
+
+    try:
+        text = ft_path.read_text(encoding="utf-8")
+    except OSError as e:
+        print(f"错误: 无法读取全文: {e}", file=sys.stderr)
+        return 1
+
+    base_cfg = build_llm_env_config(merged, "")
+    dry = dry_run
+    if not dry and (
+        not base_cfg.api_base
+        or not base_cfg.model
+        or not is_http_endpoint_url((base_cfg.api_base or "").strip())
+    ):
+        print("警告: 大模型抽取未配置有效 URL/模型，改为 dry-run 占位。", file=sys.stderr)
+        dry = True
+
+    try:
+        work = enrich_work_json_with_llm_schema_extract(work, text, base_cfg, merged, dry_run=dry)
+    except RuntimeError as e:
+        _LOG.exception("[环节:schema_llm_extract] 失败: %s", e)
+        print(f"错误: {e}", file=sys.stderr)
+        return 1
+
+    meta = work.get("_file_flow_meta")
+    if isinstance(meta, dict):
+        meta = dict(meta)
+    else:
+        meta = {}
+    meta["内容填充模式"] = "llm_schema_extract_standalone_dry_run" if dry else "llm_schema_extract_standalone"
+    meta["file_flow_schema_extract_fulltext_file"] = ft_path.name
+    work["_file_flow_meta"] = meta
+
+    out_raw = output_path
+    if out_raw is None:
+        out_raw = work_path
+    out_path = Path(out_raw)
+    out_path = out_path.resolve() if out_path.is_absolute() else (cwd / out_path).resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(work, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _LOG.info("[环节:写文件] schema 摘录已写回 path=%s", out_path)
+    print(f"已写出: {out_path.resolve()}")
+    return 0
+
+
+def _resolve_pipeline_cli(cfg_arg: Path | None) -> Path | None:
+    from .pipeline_merge import file_flow_root, resolve_pipeline_disk_path
+
+    return resolve_pipeline_disk_path(file_flow_root(), cfg_arg)
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="对已生成的 *_work.json 与同目录全文做大模型 schema 摘录")
+    ap.add_argument("--config", type=Path, default=None, help="管线 JSON；默认 file_flow/pipeline.json")
+    ap.add_argument("-i", "--work-input", type=Path, default=None, help="*_work.json 路径")
+    ap.add_argument("-o", "--output", type=Path, default=None, help="输出路径；默认覆盖输入 work 文件")
+    ap.add_argument("--dry-run", action="store_true", help="不调 API，content 写占位")
+    ap.add_argument(
+        "--log-level",
+        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+        default=None,
+        help="日志级别",
+    )
+    ap.add_argument("--log-file", type=Path, default=None, help="追加日志 UTF-8")
+    ns = ap.parse_args(argv)
+
+    from .llm_openai import configure_logging
+    from .pipeline_merge import load_merged_pipeline_config
+    from .step_dotenv import ensure_step_dotenv_loaded
+
+    configure_logging(level=ns.log_level, log_file=ns.log_file)
+
+    env_loaded, dotenv_missing = ensure_step_dotenv_loaded(_FILE_FLOW_DIR)
+    if dotenv_missing:
+        _LOG.warning("[环节:环境] 未安装 python-dotenv，已跳过 .env")
+    elif env_loaded:
+        _LOG.info("[环节:环境] 已加载环境文件 %s 个", len(env_loaded))
+
+    cfg_disk = _resolve_pipeline_cli(ns.config)
+    merged = load_merged_pipeline_config(cfg_disk if cfg_disk is not None and cfg_disk.is_file() else None)
+
+    return run_schema_llm_extract(
+        merged,
+        workspace=_FILE_FLOW_DIR,
+        cwd=Path.cwd(),
+        work_input=ns.work_input,
+        output_path=ns.output,
+        dry_run=ns.dry_run,
+        log_level=ns.log_level,
+        log_file=ns.log_file,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -6,6 +6,7 @@
 可用 ``file_flow_pdf_text_backend=pymupdf`` 强制仅用本地 PyMuPDF。
 再按 **document_types** schema（与 ``out/schema_example.json`` 一致）深拷贝生成工作 JSON；
 全文写入与 ``*_work.json`` 同目录的 ``{pdf_stem}_fulltext.txt``，**不**再把整篇 PDF 文本复制进各字段 ``content``（非 LLM 模式下 ``content`` 保持空串，供后续环节或人工填写）。
+若管线步骤中含 ``schema_llm_extract``，大模型摘录在该步执行；否则可由 ``file_flow_llm_extract`` 在本模块内联完成。
 
 schema **必须**包含非空 ``document_types`` 数组；默认 schema 路径为 ``out/schema_example.json``
 （可被 ``pipeline.json`` 的 ``file_flow_schema_json`` 或 ``--schema`` 覆盖）。

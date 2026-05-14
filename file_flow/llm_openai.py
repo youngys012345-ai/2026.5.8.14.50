@@ -20,6 +20,7 @@ file_flow 专用：OpenAI 兼容 Chat Completions 文本调用、日志、连接
 若配置了 ``LLM_API_KEY`` 与 ``LLM_API_KEY_BACKUP1`` / ``LLM_API_KEY_BACKUP2``，遇 **429 / 403**（部分厂商 QPM 限流）、**503** 等可重试类错误时，
 会在**同一请求内**依次换密钥重试；部分厂商对 QPM 返回 **400** 且正文含限流关键词时也会轮换。
 可选 ``LLM_KEY_ROTATION_SLEEP_SEC``：换 key 前休眠秒数（默认 ``0``；QPM 场景可设为 ``0.5``～``2``）。
+可选 ``LLM_HTTP_WAIT_LOG_INTERVAL_SEC``：单次请求在等待网关响应期间，每隔多少秒打一条 **WARNING** 心跳日志（默认 ``25``，设为 ``0`` 关闭）；便于排查「长时间无输出直至超时」。
 
 URL/模型/超时等从环境变量或 ``pipeline.json``（由 ``load_merged_pipeline_config`` 仅从磁盘加载；不与环境默认字典合并）读取。
 """
@@ -30,6 +31,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -157,6 +159,21 @@ def _llm_key_rotation_sleep_sec() -> float:
         return max(0.0, float(raw))
     except ValueError:
         return 0.0
+
+
+def _llm_http_wait_log_interval_sec() -> float:
+    """
+    单次 POST 阻塞等待期间，每隔多少秒打一条 WARNING 心跳（便于发现网关卡住）。
+    环境变量 ``LLM_HTTP_WAIT_LOG_INTERVAL_SEC``：默认 25；0 或负数表示关闭。
+    """
+    raw = _env_first("LLM_HTTP_WAIT_LOG_INTERVAL_SEC")
+    if raw is None:
+        return 25.0
+    try:
+        v = float(raw)
+        return 0.0 if v <= 0 else v
+    except ValueError:
+        return 25.0
 
 
 def _merged_str(merged: dict[str, Any] | None, key: str) -> str | None:
@@ -324,6 +341,9 @@ def _post_chat_completion_once(
     user_message: str,
     api_key_token: str | None,
     timeout_sec: float,
+    *,
+    key_attempt: int = 1,
+    key_total: int = 1,
 ) -> str:
     payload: dict[str, Any] = {
         "model": model,
@@ -334,10 +354,95 @@ def _post_chat_completion_once(
         headers["Authorization"] = f"Bearer {api_key_token}"
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-        body = resp.read().decode("utf-8")
-    parsed = json.loads(body)
-    return _extract_message_content(parsed).strip()
+
+    interval = _llm_http_wait_log_interval_sec()
+    stop_evt = threading.Event()
+    t0 = time.monotonic()
+
+    def _heartbeat() -> None:
+        while not stop_evt.wait(timeout=interval):
+            elapsed = time.monotonic() - t0
+            _LOG.warning(
+                "[环节:HTTP等待] 仍未收到完整响应（已阻塞约 %.0fs，单次读超时上限 %.0fs）。"
+                "可能原因：网关排队、模型推理慢、TLS/代理挂起、或上游未及时返回。",
+                elapsed,
+                timeout_sec,
+            )
+
+    hb_thread: threading.Thread | None = None
+    if interval > 0:
+        hb_thread = threading.Thread(target=_heartbeat, name="llm-http-wait-log", daemon=True)
+        hb_thread.start()
+
+    _LOG.info(
+        "[环节:HTTP] 即将进入阻塞等待：POST 密钥槽 %s/%s，JSON payload=%s 字节，读超时=%.1fs，URL=%s",
+        key_attempt,
+        key_total,
+        len(data),
+        timeout_sec,
+        url,
+    )
+
+    body = ""
+    http_status: int | None = None
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            http_status = resp.getcode()
+            body = resp.read().decode("utf-8")
+    except urllib.error.HTTPError:
+        raise
+    except (urllib.error.URLError, OSError) as e:
+        elapsed = time.monotonic() - t0
+        err_s = str(e).lower()
+        reason = getattr(e, "reason", None)
+        timed = (
+            "timed out" in err_s
+            or "timeout" in err_s
+            or isinstance(reason, TimeoutError)
+            or (isinstance(reason, BaseException) and "timeout" in str(reason).lower())
+        )
+        if timed:
+            _LOG.error(
+                "[环节:API超时或挂起] 约 %.2fs 后仍未完成（读超时设定 %.1fs）URL=%s err=%s",
+                elapsed,
+                timeout_sec,
+                url,
+                e,
+            )
+        else:
+            _LOG.error(
+                "[环节:API错误] 连接/传输失败 耗时=%.2fs URL=%s err=%s",
+                elapsed,
+                url,
+                e,
+            )
+        raise
+    finally:
+        stop_evt.set()
+        if hb_thread is not None:
+            hb_thread.join(timeout=2.0)
+
+    elapsed = time.monotonic() - t0
+    _LOG.info(
+        "[环节:HTTP] HTTP 状态=%s，已读完全部响应体，阻塞耗时 %.2fs，原始 JSON 文本约 %s 字符",
+        http_status if http_status is not None else "(未知)",
+        elapsed,
+        len(body),
+    )
+
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError as je:
+        _LOG.error(
+            "[环节:API错误] 响应非合法 JSON（HTTP 已返回，耗时 %.2fs）正文前 500 字=%s",
+            elapsed,
+            (body[:500] + ("…" if len(body) > 500 else "")),
+        )
+        raise RuntimeError(f"大模型返回非 JSON: {je}") from je
+
+    text = _extract_message_content(parsed).strip()
+    _LOG.info("[环节:HTTP] 解析完成，助手文本长度=%s", len(text))
+    return text
 
 
 def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
@@ -401,6 +506,8 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
                 combined,
                 token,
                 cfg.timeout_sec,
+                key_attempt=idx + 1,
+                key_total=len(key_slots),
             )
             if idx > 0:
                 _LOG.info(
@@ -436,5 +543,4 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
             )
             raise RuntimeError(f"大模型 HTTP 错误 {e.code}: {detail}") from e
         except urllib.error.URLError as e:
-            _LOG.error("[环节:API错误] 网络/URL 异常 URL=%s err=%s", url, e)
             raise RuntimeError(f"大模型连接失败: {e}") from e

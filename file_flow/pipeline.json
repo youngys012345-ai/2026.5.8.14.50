@@ -5,15 +5,15 @@
 
   "__环境变量": "加载顺序：file_flow/.env（不覆盖系统环境）→ 仓库根/.env（仅补缺）→ file_flow/环节变量.env（覆盖前两步同名键）。可将 LLM_API_BASE、LLM_API_KEY、LLM_MODEL 等写在仓库根 .env 或本目录 .env。依赖包见 requirements.txt 中的 python-dotenv。",
 
-  "__步骤编排": "file_flow_steps 顺序默认为：① pdf_prepare：PDF→全文文件+work 骨架；可选 schema_llm_extract 仅按字段说明从全文写 content（不读 standards）。② standards_review：按 standards 清单逐项，将整份工作 JSON（含各字段 content）嵌入每条请求的 user，对照 standard 作答（先是否符合、再简短依据），写 standards_review。③ render_html。",
+  "__步骤编排": "file_flow_steps 默认含独立步骤 schema_llm_extract。① pdf_prepare：PDF→*_fulltext.txt + *_work.json 骨架；若步骤列表中含 schema_llm_extract，则本步不做大模型（摘录推迟下一步）。② schema_llm_extract：读 work + 全文，按 schema 写字段 content。③ standards_review：清单逐项评审。④ render_html。",
 
   "__产出命名": "file_flow_suffix_* 控制各阶段 JSON 文件名中 stem 与 .json 之间的后缀（须为 _字母数字 形式），须与批量 glob 一致。",
 
-  "__pdf_prepare": "file_flow_pdf_dir 放原始 PDF；file_flow_schema_json 为 document_types 结构；写出到 file_flow_out_dir，文件名为 {pdf_stem}{suffix_work}.json。file_flow_llm_extract=true 时在一步内做大模型字段抽取。",
+  "__pdf_prepare": "file_flow_pdf_dir 放原始 PDF；file_flow_schema_json 为 document_types 结构；写出到 file_flow_out_dir，文件名为 {pdf_stem}{suffix_work}.json。若 file_flow_steps 含 schema_llm_extract，则大模型摘录在该步执行；否则 file_flow_llm_extract=true 时在 pdf_prepare 内联摘录。",
 
   "__OpenDataLoader": "hybrid 非 off 时必须能解析到 hybrid_url（本文件或 .env 的 OPENDATALOADER_HYBRID_URL）；否则底层可能连默认端口（常见 8000）。客户端请写 http://127.0.0.1:端口 或 localhost，勿写 0.0.0.0（仅为服务端 bind 语义，程序会自动把 0.0.0.0 规范为 127.0.0.1）。skip_health_check：file_flow 内默认 true（不探测 /health）；要探测请 false。",
 
-  "file_flow_steps": ["pdf_prepare", "standards_review", "render_html"],
+  "file_flow_steps": ["pdf_prepare", "schema_llm_extract", "standards_review", "render_html"],
   "file_flow_auto_batch": true,
 
   "file_flow_pdf_dir": "pdfs",

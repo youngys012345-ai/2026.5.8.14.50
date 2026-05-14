@@ -46,6 +46,7 @@ def test_call_rotates_from_primary_to_backup_on_403_empty_body(monkeypatch: pyte
         user_message: str,
         api_key_token: str | None,
         timeout_sec: float,
+        **kwargs: object,
     ) -> str:
         tokens_seen.append(api_key_token)
         if api_key_token == "k0":
@@ -74,6 +75,7 @@ def test_call_rotates_from_primary_to_backup_on_429(monkeypatch: pytest.MonkeyPa
         user_message: str,
         api_key_token: str | None,
         timeout_sec: float,
+        **kwargs: object,
     ) -> str:
         tokens_seen.append(api_key_token)
         if api_key_token == "k0":
@@ -108,6 +110,7 @@ def test_call_rotates_through_three_keys(monkeypatch: pytest.MonkeyPatch) -> Non
         user_message: str,
         api_key_token: str | None,
         timeout_sec: float,
+        **kwargs: object,
     ) -> str:
         tokens_seen.append(api_key_token)
         if api_key_token in ("k0", "k1"):
@@ -141,6 +144,7 @@ def test_last_key_429_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         user_message: str,
         api_key_token: str | None,
         timeout_sec: float,
+        **kwargs: object,
     ) -> str:
         raise urllib.error.HTTPError(
             url,
