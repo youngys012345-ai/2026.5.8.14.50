@@ -97,6 +97,7 @@ CONFIG_KEYS = frozenset(
         "file_flow_review_work_input",
         "file_flow_review_result_output",
         "file_flow_review_attach_schema_digest",
+        "file_flow_review_attach_work_json",
         "file_flow_pdf_text_backend",
         "file_flow_pdf_fallback_pymupdf",
         # 产出 JSON 文件名后缀（不含 .json），默认 _work / _answered / _review

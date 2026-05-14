@@ -5,16 +5,21 @@ file_flow 专用：OpenAI 兼容 Chat Completions 文本调用、日志、连接
 
 各环节 **system** 须分别指定：``build_llm_env_config(merged, system_prompt)`` 由调用方传入本环节的
 ``system_prompt``（如 ``schema_llm_extract.load_schema_extract_system_prompt``、
-``standards_llm_review.load_standards_review_system_prompt``、或 ``llm_fill`` 使用的字段填答默认）。
-勿将 ``FILE_FLOW_SYSTEM_PROMPT``（面向 ``llm_fill``）误当作 schema 摘录的 system。
+``standards_llm_review.load_standards_review_system_prompt``）。
+勿将 ``FILE_FLOW_SYSTEM_PROMPT`` / ``file_flow_llm_system_prompt``（历史字段级填答用）误当作 schema 摘录的 system。
 
 不依赖 ``review_standard_llm_fill`` / ``openai`` 第三方库：使用标准库 ``urllib`` 向 **Chat Completions**
-端点 POST JSON（``messages`` / ``model``），与 OpenAI 及多数兼容网关一致。
+端点 POST JSON。``file_flow`` 内各环节将**全部指令与结构化内容拼成一条 ``user`` 消息**，**不再**单独发送
+``role=system``（兼容：若 ``LlmEnvConfig.system_prompt`` 非空，会合并进同一条 ``user``，仍仅一条 user）。
 
 ``LLM_API_BASE`` 可为：
 
 - **完整 POST URL**（须含路径 ``.../chat/completions``），将原样使用；或
 - **常见根地址** ``https://主机/.../v1``（可无尾斜杠），将**自动**补全为 ``.../v1/chat/completions``。
+
+若配置了 ``LLM_API_KEY`` 与 ``LLM_API_KEY_BACKUP1`` / ``LLM_API_KEY_BACKUP2``，遇 **429 / 403**（部分厂商 QPM 限流）、**503** 等可重试类错误时，
+会在**同一请求内**依次换密钥重试；部分厂商对 QPM 返回 **400** 且正文含限流关键词时也会轮换。
+可选 ``LLM_KEY_ROTATION_SLEEP_SEC``：换 key 前休眠秒数（默认 ``0``；QPM 场景可设为 ``0.5``～``2``）。
 
 URL/模型/超时等从环境变量或 ``pipeline.json``（由 ``load_merged_pipeline_config`` 仅从磁盘加载；不与环境默认字典合并）读取。
 """
@@ -25,6 +30,7 @@ import json
 import logging
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -34,7 +40,49 @@ from urllib.parse import urlparse
 
 _LOG = logging.getLogger(__name__)
 
-_LLM_KEY_ROTATION_HTTP_CODES = frozenset({429, 503})
+# 遇限流或临时故障时，在同一请求内依次尝试 LLM_API_KEY → LLM_API_KEY_BACKUP1 → BACKUP2。
+# 含 403：部分网关/模型在 QPM 超限时返回 403（正文可能为空或不含关键词），与 429 同样轮换备用密钥。
+_LLM_KEY_ROTATION_HTTP_CODES = frozenset({403, 408, 429, 502, 503, 504, 529})
+
+
+def _response_body_suggests_rate_limit(body: str) -> bool:
+    """部分网关对 QPM/并发用 400/422 返回，正文中含限流提示时也轮换密钥。"""
+    b = (body or "").lower()
+    if not b.strip():
+        return False
+    hints = (
+        "rate limit",
+        "too many requests",
+        "quota",
+        "qpm",
+        "rpm",
+        "tpm",
+        "throttl",
+        "throttle",
+        "exceed",
+        "capacity",
+        "限流",
+        "请求过快",
+        "请求过于频繁",
+        "并发",
+        "频率",
+        "配额",
+        "调用次数",
+        "每分钟",
+        "tokens per",
+        "请稍后",
+        "retry",
+        "busy",
+    )
+    return any(h in b for h in hints)
+
+
+def _should_rotate_llm_api_key(http_code: int, response_body: str) -> bool:
+    if http_code in _LLM_KEY_ROTATION_HTTP_CODES:
+        return True
+    if http_code in (400, 422) and _response_body_suggests_rate_limit(response_body):
+        return True
+    return False
 
 
 def _extract_message_content(resp: dict[str, Any]) -> str:
@@ -100,6 +148,17 @@ def _env_first(*names: str) -> str | None:
     return None
 
 
+def _llm_key_rotation_sleep_sec() -> float:
+    """换用下一密钥前的休眠秒数；默认 0，避免拖慢单测与低延迟场景。"""
+    raw = _env_first("LLM_KEY_ROTATION_SLEEP_SEC", "LLM_KEY_ROTATION_BACKOFF_SEC")
+    if raw is None:
+        return 0.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 0.0
+
+
 def _merged_str(merged: dict[str, Any] | None, key: str) -> str | None:
     if not merged:
         return None
@@ -141,7 +200,7 @@ def configure_logging(level: int | str | None = None, log_file: Path | None = No
 
 @dataclass(frozen=True)
 class LlmEnvConfig:
-    """大模型连接参数。"""
+    """大模型连接参数。``system_prompt`` 在 ``file_flow`` 内应留空；环节指令已并入 ``call_openai_compatible_chat`` 的 ``user_text``。"""
 
     api_base: str | None
     api_keys: tuple[str, ...]
@@ -177,28 +236,6 @@ def _collect_llm_api_key_chain() -> tuple[str, ...]:
     return tuple(out)
 
 
-def _default_field_fill_system_prompt(merged: dict[str, Any] | None) -> str:
-    """
-    第二步 ``llm_fill`` 专用：对照各字段 content 与 standards 同下标的评审要点作答。
-    与第一步 schema 全文摘录、第三步 standards 清单评审的 system 相互独立，勿混用。
-    """
-    m = merged or {}
-    return (
-        _env_first(
-            "FILE_FLOW_SYSTEM_PROMPT",
-            "REVIEW_FIELD_QA_SYSTEM_PROMPT",
-            "LLM_SYSTEM_PROMPT",
-        )
-        or _merged_str(m, "file_flow_llm_system_prompt")
-        or _merged_str(m, "vlm_system_prompt")
-        or (
-            "你是行政执法案卷评审助手。用户会提供某一字段从案卷中抽取的相关文字（content）、以及需要对照的评审要点。"
-            "请严格依据「抽取内容」作答：先给出简要结论，再说明依据；不得臆测材料中不存在的内容。"
-            "若材料不足以判断，须明确说明「无法判断」并简述原因。使用简体中文。"
-        )
-    )
-
-
 def _timeout_from_env_and_merged(merged: dict[str, Any] | None) -> float:
     raw = _env_first("LLM_TIMEOUT_SEC")
     if raw is not None:
@@ -219,8 +256,11 @@ def _timeout_from_env_and_merged(merged: dict[str, Any] | None) -> float:
 
 def build_llm_env_config(merged: dict[str, Any] | None, system_prompt: str) -> LlmEnvConfig:
     """
-    仅解析连接参数（URL / 模型 / 超时 / 密钥链），``system_prompt`` 由调用方按环节传入，
-    避免把「字段填答/评审」的默认 system 误用到 schema 全文摘录等环节。
+    解析连接参数（URL / 模型 / 超时 / 密钥链）。
+
+    ``system_prompt`` 仅写入 ``LlmEnvConfig`` 供**兼容**：``call_openai_compatible_chat`` 会将其与 ``user_text``
+    合并为**一条** ``user`` 消息（不再单独发 API ``role=system``）。``file_flow`` 内各环节应传 ``\"\"``，
+    并在业务模块内自行把环节指令拼进 ``user_text``。
     """
     m = merged or {}
     api_base = (
@@ -246,6 +286,8 @@ def build_llm_env_config(merged: dict[str, Any] | None, system_prompt: str) -> L
     sp = (system_prompt or "").replace("\n", " ").strip()
     if len(sp) > 80:
         sp = sp[:79] + "…"
+    if not (system_prompt or "").strip():
+        sp = "(空，API 仅发单条 user；file_flow 内指令已并入 user 正文)"
     _LOG.info(
         "[环节:配置] file_flow LLM 连接：api_base=%s model=%s timeout=%s api_key槽位=%s（首个=%s） system 前80字=%s %s",
         cfg.api_base or "(未设置)",
@@ -259,40 +301,33 @@ def build_llm_env_config(merged: dict[str, Any] | None, system_prompt: str) -> L
     return cfg
 
 
-def load_llm_config_for_file_flow(merged: dict[str, Any] | None = None) -> LlmEnvConfig:
-    """
-    解析 LLM 配置，供 **第二步** ``llm_fill``（字段 content + standards 按下标对齐的评审问题 → answer）使用。
-
-    连接项优先级：**环境变量** > ``pipeline.json`` 的 ``file_flow_llm_*`` > ``vlm_*`` 兜底。
-    system 优先级：``FILE_FLOW_SYSTEM_PROMPT`` / ``REVIEW_FIELD_QA_SYSTEM_PROMPT`` / ``LLM_SYSTEM_PROMPT`` /
-    ``file_flow_llm_system_prompt`` / ``vlm_system_prompt`` / 内置「对照抽取内容作答」默认。
-
-    **注意**：schema 全文摘录请用 ``build_llm_env_config(merged, load_schema_extract_system_prompt(...))``（见 ``schema_llm_extract``）；
-    standards 清单评审请用 ``build_llm_env_config(merged, load_standards_review_system_prompt(...))``（见 ``standards_llm_review``）。
-    """
-    return build_llm_env_config(merged, _default_field_fill_system_prompt(merged))
-
-
 def iter_top_level_sections(data: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
     for key, val in data.items():
         if isinstance(val, dict):
             yield key, val
 
 
+def _compose_single_user_message(cfg: LlmEnvConfig, user_text: str) -> str:
+    """
+    合并为一条 user 正文。``file_flow`` 默认 ``cfg.system_prompt`` 为空；若非空（兼容旧代码）则插在首部。
+    """
+    sp = (cfg.system_prompt or "").strip()
+    ut = user_text or ""
+    if not sp:
+        return ut
+    return f"{sp}\n\n---\n\n{ut}"
+
+
 def _post_chat_completion_once(
     url: str,
     model: str,
-    system_prompt: str,
-    user_text: str,
+    user_message: str,
     api_key_token: str | None,
     timeout_sec: float,
 ) -> str:
     payload: dict[str, Any] = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ],
+        "messages": [{"role": "user", "content": user_message}],
     }
     headers = {"Content-Type": "application/json; charset=utf-8"}
     if api_key_token:
@@ -306,7 +341,12 @@ def _post_chat_completion_once(
 
 
 def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
-    """遇 429/503 时在同一调用内轮换 ``api_keys`` 重试。"""
+    """
+    发起 Chat Completions 请求：``messages`` 仅含一条 ``role=user``（``file_flow`` 将环节指令已拼入 ``user_text``）。
+
+    若 ``cfg.system_prompt`` 非空（兼容旧代码），会经 ``_compose_single_user_message`` 合并进同一条 ``user``，仍不单独发 ``system``。
+    遇限流等错误时在同一调用内依次轮换 ``api_keys`` 重试。
+    """
     if not cfg.api_base or not str(cfg.api_base).strip():
         raise RuntimeError(
             "未读取到大模型 API 地址：请设置 LLM_API_BASE 或 OPENAI_API_BASE（OpenAI 兼容网关可用 ``https://主机/.../v1``，"
@@ -322,12 +362,6 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
         )
     raw = cfg.api_base.strip()
     url = normalize_llm_chat_completions_url(raw)
-    if url != raw.rstrip("/"):
-        _LOG.info(
-            "[环节:API] LLM_API_BASE 已规范为 Chat Completions 地址（原为根路径时可自动补全）: %s -> %s",
-            raw,
-            url,
-        )
     if not is_http_endpoint_url(url):
         preview = url if len(url) <= 120 else url[:117] + "..."
         raise RuntimeError(
@@ -336,26 +370,27 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
             f"当前规范化后为: {preview!r}"
         )
     key_slots: list[str | None] = list(cfg.api_keys) if cfg.api_keys else [None]
+    combined = _compose_single_user_message(cfg, user_text)
     if len(key_slots) > 1:
         _LOG.info(
-            "[环节:API请求] POST %s model=%s 超时=%ss 用户消息字符数=%s 密钥轮询槽位=%s",
+            "[环节:API请求] POST %s model=%s 超时=%ss 单条user字符数=%s 密钥轮询槽位=%s",
             url,
             cfg.model,
             cfg.timeout_sec,
-            len(user_text),
+            len(combined),
             len(key_slots),
         )
     else:
         _LOG.info(
-            "[环节:API请求] POST %s model=%s 超时=%ss 用户消息字符数=%s",
+            "[环节:API请求] POST %s model=%s 超时=%ss 单条user字符数=%s",
             url,
             cfg.model,
             cfg.timeout_sec,
-            len(user_text),
+            len(combined),
         )
     _LOG.debug(
-        "[环节:prompt预览] system 前80字=%s",
-        (cfg.system_prompt[:80] + "…") if len(cfg.system_prompt) > 80 else cfg.system_prompt,
+        "[环节:prompt预览] user 前120字=%s",
+        (combined[:120] + "…") if len(combined) > 120 else combined,
     )
 
     for idx, token in enumerate(key_slots):
@@ -363,8 +398,7 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
             text = _post_chat_completion_once(
                 url,
                 cfg.model,
-                cfg.system_prompt,
-                user_text,
+                combined,
                 token,
                 cfg.timeout_sec,
             )
@@ -380,15 +414,19 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
             return text
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", errors="replace")
-            if e.code in _LLM_KEY_ROTATION_HTTP_CODES and idx < len(key_slots) - 1:
+            backoff = _llm_key_rotation_sleep_sec()
+            if _should_rotate_llm_api_key(e.code, detail) and idx < len(key_slots) - 1:
                 _LOG.warning(
-                    "[环节:密钥轮换] HTTP %s，换用下一密钥 %s/%s URL=%s 响应片段=%s",
+                    "[环节:密钥轮换] HTTP %s，%s 后换用第 %s/%s 个密钥 URL=%s 响应片段=%s",
                     e.code,
+                    f"休眠 {backoff}s" if backoff > 0 else "无休眠",
                     idx + 2,
                     len(key_slots),
                     url,
                     detail[:300] + ("…" if len(detail) > 300 else ""),
                 )
+                if backoff > 0:
+                    time.sleep(backoff)
                 continue
             _LOG.error(
                 "[环节:API错误] HTTP %s URL=%s 响应正文片段=%s",

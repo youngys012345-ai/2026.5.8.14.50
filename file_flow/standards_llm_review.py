@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-在上一步 ``*_work.json``（或填答后的 JSON）含 ``document_types`` 与各字段 ``content`` 之后，
+在 ``*_work.json`` 已含 ``document_types`` 与各字段 ``content``（由 ``pdf_prepare`` / schema 摘录写入）后，
 读取 **评审标准清单** JSON（与 ``out/standards_example.json`` 一致：顶层数组），
-对其中**每一项**调用大模型：将 ``category``、``subcategory``、``content`` 拼成「分类上下文」，
-对照条目的 ``standard`` 字段作答；将模型输出写入该条目的 ``review_answer``。
+对其中**每一项**调用大模型：每条标准自带 ``category`` / ``subcategory`` / ``content`` 等分类上下文，
+并附上**整份**工作 JSON（案卷 schema 与已填 ``content``）作为对照材料；针对 ``standard`` 先判断是否**符合**，
+再给出**简短**依据。将模型输出写入该条目的 ``review_answer``。
 
 最终写出**结果 JSON**：在输入工作 JSON 的完整拷贝上增加 ``standards_review`` 对象
 （含 ``items``：原字段 + ``review_answer``，以及 ``standards_path`` 等元数据），便于下游可视化。
@@ -52,17 +53,17 @@ ensure_step_dotenv_loaded(_FILE_FLOW_DIR)
 
 _LOG = logging.getLogger(__name__)
 
-# 每条请求中「案卷摘录汇总」上限，避免撑爆上下文
-_MAX_DIGEST_CHARS = 100_000
+# 每条请求中嵌入的「整份工作 JSON」字符上限，避免撑爆上下文
+_MAX_WORK_JSON_CHARS = 120_000
 
 DEFAULT_STANDARDS_REVIEW_SYSTEM = (
-    "你是行政执法案卷评审助手。用户会提供："
-    "（1）分类上下文：由类别 category、子类 subcategory、相关说明 content 组成；"
-    "（2）可选的案卷摘录汇总，来自上一步按 schema 从案卷抽取的各字段 content；"
-    "（3）须对照回答的评审标准 standard（可为条文、检查项或具体问题）。"
-    "请结合分类上下文与摘录（若提供）作出专业判断：先给出简要结论，再说明依据；"
-    "不得编造材料中不存在的事实。若信息不足，须明确说明「无法判断」及原因。"
-    "使用简体中文，条理清晰。"
+    "你是行政执法案卷评审助手。用户消息中会提供："
+    "（1）本条评审标准在清单内的分类上下文（category、subcategory、条目 content 等）；"
+    "（2）可选的**完整案卷工作 JSON**（与 *_work.json 一致，含 document_types 及各字段已填 content）；"
+    "（3）须对照判断的评审标准 standard（条文、检查项或具体问题）。"
+    "你的回答须分两步：①先明确给出是否**符合**该 standard（可用「符合 / 不符合 / 无法判断」等表述）；"
+    "②再给出**简短**依据（一两句即可，引用工作 JSON 或分类上下文中的事实）。"
+    "不得编造工作 JSON 中不存在的内容；若材料不足以判断，须说明「无法判断」及原因。使用简体中文。"
 )
 
 
@@ -85,7 +86,10 @@ def _merged_str(merged: dict[str, Any] | None, key: str) -> str | None:
 
 
 def load_standards_review_system_prompt(merged: dict[str, Any] | None = None) -> str:
-    """本环节专用 system：环境变量 / pipeline 的 file_flow_standards_review_system_prompt。"""
+    """
+    清单评审环节的**指令文本**（并入单条 ``user``；不单独发 API ``system``）。
+    来源：``FILE_FLOW_STANDARDS_REVIEW_SYSTEM_PROMPT`` / ``file_flow_standards_review_system_prompt`` / 内置默认。
+    """
     m = merged or {}
     return (
         _env_first("FILE_FLOW_STANDARDS_REVIEW_SYSTEM_PROMPT")
@@ -105,42 +109,28 @@ def _truthy_merged(merged: dict[str, Any] | None, key: str, default: bool = True
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
-def _digest_from_work(work: dict[str, Any], max_chars: int = _MAX_DIGEST_CHARS) -> str:
-    """从 ``document_types`` 各 field 的 ``content`` 拼成案卷摘录汇总。"""
-    chunks: list[str] = []
-    docs = work.get("document_types")
-    if not isinstance(docs, list):
-        return ""
-    for doc in docs:
-        if not isinstance(doc, dict):
-            continue
-        doc_name = str(doc.get("document_name", "") or doc.get("document_type", "")).strip() or "（文书）"
-        fields = doc.get("fields")
-        if not isinstance(fields, list):
-            continue
-        for field in fields:
-            if not isinstance(field, dict):
-                continue
-            fn = str(field.get("field_name", "")).strip() or "（字段）"
-            raw = field.get("content")
-            c = str(raw).strip() if raw is not None else ""
-            if c:
-                chunks.append(f"【{doc_name} / {fn}】\n{c}")
-    text = "\n\n".join(chunks)
+def serialize_work_json_for_review(work: dict[str, Any], max_chars: int = _MAX_WORK_JSON_CHARS) -> str:
+    """将整份工作 JSON 序列化为字符串，供每条 standard 的 prompt 共用（可能截断）。"""
+    try:
+        text = json.dumps(work, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError):
+        return "（工作 JSON 无法序列化）"
     if len(text) <= max_chars:
         return text
-    return text[:max_chars] + f"\n\n（摘录汇总已截断至前 {max_chars} 字符，原约 {len(text)} 字符）"
+    return (
+        text[:max_chars]
+        + f"\n\n（工作 JSON 已截断至前 {max_chars} 字符，原约 {len(text)} 字符；请仅依据已给出部分判断）"
+    )
 
 
 def build_standards_review_user_prompt(
     row: dict[str, Any],
-    digest: str,
+    work_json_text: str,
     *,
-    attach_digest: bool,
+    attach_work_json: bool,
 ) -> str:
     """
-    构造单条标准项的用户消息：分类上下文（category + subcategory + content）+ 可选摘录汇总
-    + standard（须作答的评审标准表述）。
+    构造单条标准项的提示正文：分类上下文 + 可选**整份工作 JSON** + standard + 作答格式要求。
     """
     cat = str(row.get("category", "")).strip()
     sub = str(row.get("subcategory", "")).strip()
@@ -167,19 +157,41 @@ def build_standards_review_user_prompt(
         blocks.append("【本条元数据】")
         blocks.extend(meta_lines)
 
-    if attach_digest and digest.strip():
-        blocks.extend(["", "【案卷摘录汇总】（来自上一步 schema 各字段 content，供对照）", digest])
+    if attach_work_json and work_json_text.strip():
+        blocks.extend(
+            [
+                "",
+                "【案卷工作 JSON（完整上下文，含 document_types 与各字段 content 等）】",
+                work_json_text.strip(),
+            ]
+        )
 
     blocks.extend(
         [
             "",
-            "【须对照作答的评审标准（standard）】",
+            "【须对照判断的评审标准（standard）】",
             std or "（未配置 standard）",
             "",
-            "请仅针对上述「评审标准（standard）」组织答案；若与案卷摘录矛盾，以摘录为准并说明。",
+            "请针对上述 standard：先判断是否**符合**（可写「符合」「不符合」「无法判断」等），再写**简短**依据（一两句）。"
+            "依据须来自上方「案卷工作 JSON」或分类上下文；若不足以判断，说明原因。",
         ]
     )
     return "\n".join(blocks)
+
+
+def build_standards_review_full_user_prompt(
+    merged: dict[str, Any] | None,
+    row: dict[str, Any],
+    work_json_text: str,
+    *,
+    attach_work_json: bool,
+) -> str:
+    """环节指令 + 分类上下文 / 整份工作 JSON / standard，合并为一条 user 正文。"""
+    head = load_standards_review_system_prompt(merged).strip()
+    body = build_standards_review_user_prompt(row, work_json_text, attach_work_json=attach_work_json)
+    if not head:
+        return body
+    return f"{head}\n\n---\n\n{body}"
 
 
 def run_standards_llm_review_on_data(
@@ -195,10 +207,13 @@ def run_standards_llm_review_on_data(
     返回新 dict：``work`` 深拷贝 + ``standards_review``（每条含 ``review_answer``）。
     """
     out: dict[str, Any] = json.loads(json.dumps(work, ensure_ascii=False))
-    sys_prompt = load_standards_review_system_prompt(merged)
-    cfg = replace(base_cfg, system_prompt=sys_prompt)
-    attach = _truthy_merged(merged, "file_flow_review_attach_schema_digest", default=True)
-    digest = _digest_from_work(out) if attach else ""
+    cfg = replace(base_cfg, system_prompt="")
+    m = merged or {}
+    if "file_flow_review_attach_work_json" in m:
+        attach = _truthy_merged(merged, "file_flow_review_attach_work_json", default=True)
+    else:
+        attach = _truthy_merged(merged, "file_flow_review_attach_schema_digest", default=True)
+    work_json_text = serialize_work_json_for_review(out) if attach else ""
 
     items_out: list[dict[str, Any]] = []
     total = len(standards_rows)
@@ -206,7 +221,9 @@ def run_standards_llm_review_on_data(
         if not isinstance(row, dict):
             continue
         one = json.loads(json.dumps(row, ensure_ascii=False))
-        user = build_standards_review_user_prompt(one, digest, attach_digest=attach)
+        user = build_standards_review_full_user_prompt(
+            merged, one, work_json_text, attach_work_json=attach
+        )
         _LOG.info(
             "[环节:标准评审] (%s/%s) category=%s subcategory=%s 用户消息字符数=%s",
             idx,
@@ -230,6 +247,9 @@ def run_standards_llm_review_on_data(
         "standards_path": str(standards_path.resolve()),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "items": items_out,
+        # work_json_attached：是否把整份工作 JSON 嵌入每条评审请求的 user 正文
+        "work_json_attached": attach,
+        # 兼容旧键名（含义与 work_json_attached 相同）
         "digest_attached": attach,
     }
     meta = out.get("_file_flow_meta")
@@ -268,14 +288,12 @@ def run_standards_review(
 
     in_raw = work_input
     if in_raw is None:
-        for key in ("file_flow_review_work_input", "file_flow_llm_output", "file_flow_llm_input"):
-            v = merged.get(key)
-            if isinstance(v, str) and v.strip():
-                in_raw = Path(v.strip())
-                break
+        v = merged.get("file_flow_review_work_input")
+        if isinstance(v, str) and v.strip():
+            in_raw = Path(v.strip())
     if in_raw is None:
         print(
-            "错误: 未指定工作 JSON，请设置 file_flow_review_work_input / file_flow_llm_output / file_flow_llm_input 或使用 -i",
+            "错误: 未指定工作 JSON，请设置 file_flow_review_work_input 或使用 -i/--work-input",
             file=sys.stderr,
         )
         return 1
@@ -329,7 +347,7 @@ def run_standards_review(
         return 1
     standards_rows = [x for x in standards_data if isinstance(x, dict)]
 
-    base_cfg = build_llm_env_config(merged, load_standards_review_system_prompt(merged))
+    base_cfg = build_llm_env_config(merged, "")
     dry = dry_run
     if not dry and (
         not base_cfg.api_base
@@ -365,7 +383,9 @@ def _resolve_pipeline_cli(cfg_arg: Path | None) -> Path | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="按 standards 清单对案卷摘录逐项调用大模型评审，写出完整 review JSON")
+    ap = argparse.ArgumentParser(
+        description="按 standards 清单逐项调用大模型评审：每条请求附带整份工作 JSON（含 content），写出 *_review.json"
+    )
     ap.add_argument("--config", type=Path, default=None, help="管线 JSON；默认使用 file_flow 目录下的 pipeline.json")
     ap.add_argument("-i", "--work-input", type=Path, default=None, help="上一步工作 JSON（*_work.json 等）")
     ap.add_argument(

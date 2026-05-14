@@ -42,7 +42,6 @@ from .pdf_text_extract import extract_pdf_full_text_unified  # noqa: E402
 from .naming import work_json_filename_for_stem  # noqa: E402
 from .schema_llm_extract import (  # noqa: E402
     enrich_work_json_with_llm_schema_extract,
-    load_schema_extract_system_prompt,
 )
 
 ensure_step_dotenv_loaded(_FILE_FLOW_DIR)
@@ -213,8 +212,8 @@ def run_pdf_prepare(
         work = build_work_json_skeleton(schema_data)
         mode_note = "fulltext_file_only"
         if llm_extract:
-            # 连接参数与「全文摘录」专用 system 一并构造，勿用 llm_fill 的评审向默认 system
-            base_cfg = build_llm_env_config(merged, load_schema_extract_system_prompt(merged))
+            # 连接参数与「全文摘录」专用 system 一并构造，勿用 FILE_FLOW_SYSTEM_PROMPT 等评审向默认文案
+            base_cfg = build_llm_env_config(merged, "")
             dry = dry_run
             if not dry and (
                 not base_cfg.api_base

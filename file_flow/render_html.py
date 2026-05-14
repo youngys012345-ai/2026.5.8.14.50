@@ -260,14 +260,14 @@ def run_render_html(
     """可编程入口：JSON → HTML。"""
     in_raw = input_path
     if in_raw is None:
-        for key in ("file_flow_render_html_input", "file_flow_review_result_output", "file_flow_llm_output"):
+        for key in ("file_flow_render_html_input", "file_flow_review_result_output"):
             v = merged.get(key)
             if isinstance(v, str) and v.strip():
                 in_raw = Path(v.strip())
                 break
     if in_raw is None:
         print(
-            "错误: 未指定 render 输入，请设 file_flow_render_html_input / file_flow_review_result_output / file_flow_llm_output",
+            "错误: 未指定 render 输入，请设 file_flow_render_html_input / file_flow_review_result_output",
             file=sys.stderr,
         )
         return 1
@@ -310,7 +310,7 @@ def run_render_html(
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="将评审 JSON 渲染为静态 HTML")
-    ap.add_argument("-i", "--input", type=Path, required=True, help="*_review.json、*_answered.json 或 *_work.json")
+    ap.add_argument("-i", "--input", type=Path, required=True, help="*_review.json 或 *_work.json（含 standards_review 时优先 review）")
     ap.add_argument("-o", "--output", type=Path, required=True, help="输出 .html 路径")
     ap.add_argument("--title", default="案卷评审结果浏览", help="页面标题")
     ns = ap.parse_args(argv)

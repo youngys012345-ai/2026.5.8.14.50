@@ -4,8 +4,8 @@
 按 **document_types** 结构（与 ``out/schema_example.json`` 一致）调用大模型，
 从 PDF 全文中为各 ``fields`` 项摘录匹配内容，写入字段对象下的 ``content``。
 
-**本环节只做「从全文按 schema 字段说明做信息摘录」**，不读取 ``standards.json``、不在 user 消息中拼接
-任何「评审问题 / standard」；评审逻辑在 **第二步** ``llm_fill`` 与 **第三步** ``standards_llm_review``。
+**本环节只做「从 PDF 正文按 schema 索引做信息摘录」**，不读取 ``standards.json``、不在 user 消息中拼接
+任何「评审问题 / standard」。清单级评审见 ``standards_llm_review``（读取已填 ``content`` 的整份工作 JSON）。
 
 1. **公共上下文**：每项文书将 ``document_name`` 与文书级 ``description`` 拼成固定前缀。
 2. **逐字段一次调用**：每条字段仅依据 **字段名称（field_name）** 与 **字段说明（description）** 作为抽取目标，
@@ -14,7 +14,7 @@
    写入该字段 ``content``。
 
 大模型 **system** 使用 ``load_schema_extract_system_prompt``（或环境变量 ``FILE_FLOW_SCHEMA_EXTRACT_SYSTEM_PROMPT``），
-与 ``llm_fill`` 使用的 ``FILE_FLOW_SYSTEM_PROMPT`` / ``file_flow_llm_system_prompt`` 相互独立。
+与 ``FILE_FLOW_SYSTEM_PROMPT`` / ``file_flow_llm_system_prompt``（历史字段级填答用）相互独立。
 
 根对象**必须**包含非空的 ``document_types`` 数组；否则 ``pdf_prepare`` 会在加载阶段报错退出。
 """
@@ -44,7 +44,7 @@ def _log_clip(s: str, max_chars: int = 200) -> str:
 
 def summarize_schema_extract_user_prompt_for_log(user_text: str) -> str:
     """
-    仅用于日志：按实际构造的 user 串解析各块；「【PDF 全文】」与固定结尾指令只作结构展示，不展开正文。
+    仅用于日志：按实际构造的 user 串解析各块；「【PDF 全文】」之后只报字符数，不展开正文。
     """
     lines: list[str] = [
         f"[环节:schema 抽取 user prompt 结构摘要] 用户消息总字符数={len(user_text)}",
@@ -52,7 +52,6 @@ def summarize_schema_extract_user_prompt_for_log(user_text: str) -> str:
     fn_mark = "【字段名称】"
     fd_mark = "【字段说明】"
     pdf_mark = "【PDF 全文】"
-    tail_mark = "请只输出从【PDF 全文】"
 
     i_fn = user_text.find(fn_mark)
     if i_fn == -1:
@@ -79,15 +78,8 @@ def summarize_schema_extract_user_prompt_for_log(user_text: str) -> str:
     lines.append(f"  ├─ 【字段说明】 {_log_clip(body_fd, 240)}")
 
     start_pdf = i_pdf + len(pdf_mark)
-    i_tail = user_text.find(tail_mark, start_pdf)
-    if i_tail == -1:
-        body_pdf = user_text[start_pdf:].strip()
-        lines.append(f"  ├─ 【PDF 全文】 字符数={len(body_pdf)}（未匹配结尾指令，正文不展开）")
-    else:
-        body_pdf = user_text[start_pdf:i_tail].strip()
-        lines.append(f"  ├─ 【PDF 全文】 字符数={len(body_pdf)}（正文不在日志中展开）")
-        rest = user_text[i_tail:].strip()
-        lines.append(f"  └─ 【固定结尾指令】 {_log_clip(rest, 220)}")
+    body_pdf = user_text[start_pdf:].strip()
+    lines.append(f"  └─ 【PDF 全文】之后正文 字符数={len(body_pdf)}（不在日志中展开）")
     return "\n".join(lines)
 
 
@@ -103,12 +95,13 @@ def _env_first(*names: str) -> str | None:
 _MAX_FULLTEXT_CHARS = 9999999
 
 DEFAULT_SCHEMA_EXTRACT_SYSTEM = (
-    "你是行政执法案卷信息抽取助手。用户会提供：文书类公共上下文、本条字段的名称与说明、"
-    "以及从 PDF 解析得到的全文。"
-    "请**仅从全文**中摘录与「字段名称」「字段说明」直接相关的原文片段（可含多条、可含表格转写文字）；"
-    "若文中找不到相关内容，必须只输出空字符串，不要编造。"
-    "可直接输出摘录原文（保留模型给出的 Markdown 代码围栏等格式；本程序不对回复做围栏去除）。"
-    "不要输出 JSON、不要前后解释。"
+    "你是案卷材料**信息抽取**模型（本步只做摘录，不做评审、不答题、不下结论）。\n"
+    "输入中会给出 schema 定义的抽取目标索引：文书名称、文书说明、字段名称、字段说明，以及从 PDF 解析得到的正文。\n"
+    "你的唯一任务：仅根据上述索引在正文中**检索并摘录**与索引语义直接相关的**全部**原文片段"
+    "（可多条、可含表格/列表的转写文字；保持与原文一致的表述）。\n"
+    "严禁在本步进行「是否符合规范」「是否通过评审」等判断；严禁回答评审类问题；这些由后续环节处理。\n"
+    "若正文不存在相关内容，只输出空字符串，不得编造。\n"
+    "只输出摘录正文本身：不要输出 JSON，不要写前言/结语/小标题式的任务复述。"
 )
 
 
@@ -123,7 +116,11 @@ def _merged_str(merged: dict[str, Any] | None, key: str) -> str | None:
 
 
 def load_schema_extract_system_prompt(merged: dict[str, Any] | None = None) -> str:
-    """抽取环节专用 system：环境变量 / pipeline 的 file_flow_schema_extract_system_prompt。"""
+    """
+    schema 摘录环节的**指令文本**（并入单条 ``user`` 消息首部；不单独发 Chat Completions 的 ``system``）。
+    来源：环境变量 ``FILE_FLOW_SCHEMA_EXTRACT_SYSTEM_PROMPT`` / ``pipeline.json`` 的
+    ``file_flow_schema_extract_system_prompt`` / 内置默认。
+    """
     m = merged or {}
     return (
         _env_first("FILE_FLOW_SCHEMA_EXTRACT_SYSTEM_PROMPT")
@@ -147,7 +144,7 @@ def parse_llm_plain_excerpt(raw: str) -> str:
 
 
 def build_public_context(document_name: str, document_description: str) -> str:
-    """文书级公共上下文：文书名称 + 文书说明。"""
+    """文书级抽取目标：schema 中文书名称 + 文书级 description（与 JSON 字段一致）。"""
     name = (document_name or "").strip() or "（未命名文书）"
     desc = (document_description or "").strip()
     if desc:
@@ -161,16 +158,40 @@ def build_field_extract_user_prompt(
     field_description: str,
     full_text: str,
 ) -> str:
-    """单字段抽取：公共上下文 + field_name + description + 全文。"""
+    """
+    单字段抽取：显式列出 schema 抽取目标索引 + PDF 正文；指令为「摘录」而非「作答」。
+    """
     fn = (field_name or "").strip() or "（未命名字段）"
     fd = (field_description or "").strip() or "（无）"
     return (
-        f"{public_context}\n\n"
+        "以下为 schema 定义的**抽取目标索引**（请仅据此在文末 PDF 正文中做客观摘录；"
+        "本步不做评审、不回答评审问题、不下合规结论）：\n\n"
+        f"{public_context}\n"
         f"【字段名称】{fn}\n"
         f"【字段说明】{fd}\n\n"
-        f"【PDF 全文】\n{_clip_full_text(full_text)}\n\n"
-        "请只输出从【PDF 全文】中与上述「字段名称」「字段说明」相关的原文摘录；无则输出空字符串。"
+        "【抽取任务】\n"
+        "在【PDF 全文】中检索并摘录**所有**与上述文书名称、文书说明、字段名称、字段说明在语义上直接相关的原文。"
+        "可输出多条摘录，条间可用换行分隔；不要评价材料好坏。\n\n"
+        "【输出格式】\n"
+        "仅输出摘录到的正文；若全文无任何匹配内容，只输出一个空字符串，不要输出「无」「未找到」等说明性句子。"
+        "不要输出 JSON，不要复述本任务书全文。\n\n"
+        f"【PDF 全文】\n{_clip_full_text(full_text)}"
     )
+
+
+def build_schema_extract_full_user_prompt(
+    merged: dict[str, Any] | None,
+    public_context: str,
+    field_name: str,
+    field_description: str,
+    full_text: str,
+) -> str:
+    """环节指令 + 结构化抽取请求 + PDF 全文，合并为**一条**将发给模型的 user 正文。"""
+    head = load_schema_extract_system_prompt(merged).strip()
+    body = build_field_extract_user_prompt(public_context, field_name, field_description, full_text)
+    if not head:
+        return body
+    return f"{head}\n\n---\n\n{body}"
 
 
 def _field_display_name(field_obj: dict[str, Any]) -> str:
@@ -191,12 +212,11 @@ def enrich_work_json_with_llm_schema_extract(
     """
     深拷贝 ``work``，按「公共上下文 + 字段名称 + 字段说明」每字段调用大模型一次，将摘录写入 ``content``。
 
-    ``base_cfg`` 仅提供连接参数（api_base、model、keys、timeout）；**无论传入的 system_prompt 为何**，
-    实际请求前都会替换为 ``load_schema_extract_system_prompt(merged)``，避免误用 ``llm_fill`` 的评审向 system。
+    ``base_cfg`` 仅提供连接参数；``LlmEnvConfig.system_prompt`` 应为空，环节指令由
+    ``build_schema_extract_full_user_prompt`` 并入单条 ``user``。
     """
     out: dict[str, Any] = json.loads(json.dumps(work, ensure_ascii=False))
-    extract_sys = load_schema_extract_system_prompt(merged)
-    cfg = replace(base_cfg, system_prompt=extract_sys)
+    cfg = replace(base_cfg, system_prompt="")
 
     docs = out.get("document_types")
     if not isinstance(docs, list) or not docs:
@@ -232,20 +252,20 @@ def enrich_work_json_with_llm_schema_extract(
             label = _field_display_name(field)
             desc = str(field.get("description", "")).strip()
             done += 1
-            user = build_field_extract_user_prompt(public, label, desc, pdf_full_text)
+            full_user = build_schema_extract_full_user_prompt(merged, public, label, desc, pdf_full_text)
             _LOG.info(
                 "[环节:抽取] (%s/%s) 文书=%s 字段=%s\n%s",
                 done,
                 total,
                 doc_name or "?",
                 label,
-                summarize_schema_extract_user_prompt_for_log(user),
+                summarize_schema_extract_user_prompt_for_log(full_user),
             )
             if dry_run:
                 field["content"] = "[dry-run 未调用大模型抽取]"
             else:
                 try:
-                    raw_reply = call_openai_compatible_chat(cfg, user)
+                    raw_reply = call_openai_compatible_chat(cfg, full_user)
                 except RuntimeError:
                     _LOG.exception("[环节:抽取] 文书「%s」字段「%s」API 失败", doc_name, label)
                     raise

@@ -34,6 +34,8 @@ def test_build_public_context_and_field_extract_prompt() -> None:
     assert "立案表" in pub and "说明文字" in pub
     u = build_field_extract_user_prompt(pub, "案由", "填写立案案由", "PDF全文示例")
     assert "案由" in u and "填写立案案由" in u and "PDF全文示例" in u
+    assert "抽取目标索引" in u and "【抽取任务】" in u and "【文书名称】" in u
+    assert "【评审问题】" not in u
 
 
 def test_nested_schema_skeleton() -> None:
@@ -97,13 +99,13 @@ def test_enrich_one_call_per_field_dry_run() -> None:
     assert "dry-run" in c
 
 
-def test_enrich_replaces_cfg_system_with_schema_extract_prompt(monkeypatch) -> None:
-    """即使传入 llm_fill 风格的评审 system，实际请求也必须换成 schema 摘录专用 system。"""
+def test_enrich_discards_cfg_system_merges_instruction_into_user(monkeypatch) -> None:
+    """传入的 cfg.system_prompt 应被清空；schema 环节指令并入单条 user，且不得含评审块。"""
     captured: dict[str, str] = {}
 
     def fake_chat(cfg, user_text: str) -> str:
-        captured["system"] = cfg.system_prompt
-        captured["user_has_review_block"] = "【评审问题】" in user_text
+        captured["cfg_system"] = cfg.system_prompt
+        captured["user"] = user_text
         return "摘录"
 
     monkeypatch.setattr(
@@ -124,14 +126,16 @@ def test_enrich_replaces_cfg_system_with_schema_extract_prompt(monkeypatch) -> N
         api_keys=("k",),
         model="m",
         timeout_sec=1.0,
-        system_prompt="你是评审助手（错误地传入的 system，应被替换）",
+        system_prompt="你是评审助手（应被忽略，不进入 API）",
     )
     enrich_work_json_with_llm_schema_extract(work, "全文X", cfg, None, dry_run=False)
-    assert "信息抽取" in captured["system"] or "摘录" in captured["system"]
-    assert "错误的评审" not in captured["system"]
-    assert captured["user_has_review_block"] is False
+    assert captured["cfg_system"] == ""
+    assert "信息抽取" in captured["user"]
+    assert "错误的评审" not in captured["user"]
+    assert "【评审问题】" not in captured["user"]
 
 
+def test_enrich_two_fields_two_calls(monkeypatch) -> None:
     calls: list[str] = []
 
     def fake_chat(_cfg, user_text: str) -> str:
@@ -159,7 +163,7 @@ def test_enrich_replaces_cfg_system_with_schema_extract_prompt(monkeypatch) -> N
         api_keys=("k",),
         model="m",
         timeout_sec=1.0,
-        system_prompt="sys",
+        system_prompt="",
     )
     out = enrich_work_json_with_llm_schema_extract(work, "全文X", cfg, None, dry_run=False)
     assert len(calls) == 2
