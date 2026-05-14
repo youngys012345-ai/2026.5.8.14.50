@@ -10,7 +10,7 @@
 
 环境变量（与上一环节共用连接参数）：
 
-- ``LLM_API_BASE``（完整 ``https://…`` Chat Completions POST URL）、``LLM_MODEL``、``LLM_API_KEY``（与 ``review_standard_llm_fill.load_llm_config_from_env`` 相同）；可选 ``LLM_API_KEY_BACKUP1``、``LLM_API_KEY_BACKUP2`` 在主密钥 429/503 时自动轮换（见 ``call_openai_compatible_chat``）。
+- ``LLM_API_BASE``（完整 ``https://…`` Chat Completions POST URL）、``LLM_MODEL``、``LLM_API_KEY``（与 ``review_standard_llm_fill.load_llm_config_from_env`` 相同）；可选 ``LLM_API_KEY_BACKUP1``～``LLM_API_KEY_BACKUP4`` 在主密钥 429/503 时按顺序自动轮换（见 ``call_openai_compatible_chat``）。
 - ``REVIEW_FIELD_QA_SYSTEM_PROMPT``：本环节专用系统提示；未设置则使用本模块默认评审作答提示。
 - 日志级别可用 ``REVIEW_STANDARD_LLM_LOG_LEVEL``（与 fill 脚本共用 configure_logging）。
 - 非 dry-run 时，首次调用大模型会在日志中输出**首条** system 提示、user 全文（过长则截断）及**首条**助手回复（过长则截断）。

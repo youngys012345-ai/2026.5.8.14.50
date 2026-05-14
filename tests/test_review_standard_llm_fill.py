@@ -73,8 +73,10 @@ def test_load_llm_config_from_env_collects_backup_keys(monkeypatch: pytest.Monke
     monkeypatch.setenv("LLM_API_KEY", "primary")
     monkeypatch.setenv("LLM_API_KEY_BACKUP1", "b1")
     monkeypatch.setenv("LLM_API_KEY_BACKUP2", "b2")
+    monkeypatch.setenv("LLM_API_KEY_BACKUP3", "b3")
+    monkeypatch.setenv("LLM_API_KEY_BACKUP4", "b4")
     c = load_llm_config_from_env()
-    assert c.api_keys == ("primary", "b1", "b2")
+    assert c.api_keys == ("primary", "b1", "b2", "b3", "b4")
     assert c.api_key == "primary"
 
 
@@ -84,8 +86,10 @@ def test_load_llm_config_from_env_backup_keys_dedup(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("LLM_API_KEY", "same")
     monkeypatch.setenv("LLM_API_KEY_BACKUP1", "same")
     monkeypatch.setenv("LLM_API_KEY_BACKUP2", "other")
+    monkeypatch.setenv("LLM_API_KEY_BACKUP3", "other")
+    monkeypatch.setenv("LLM_API_KEY_BACKUP4", "last")
     c = load_llm_config_from_env()
-    assert c.api_keys == ("same", "other")
+    assert c.api_keys == ("same", "other", "last")
 
 
 def test_call_openai_compatible_chat_retries_on_429_with_next_key() -> None:

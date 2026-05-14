@@ -26,8 +26,8 @@ Prompt 模板定义位置（换机迁移时优先核对）
 
 - ``LLM_API_BASE``：完整 Chat Completions **POST URL**（须以 ``http://`` 或 ``https://`` 开头），例如 ``https://api.openai.com/v1/chat/completions``；兼容 ``OPENAI_API_BASE``（若仍使用旧名，请同样填完整 URL）。配置原样用于请求，不做路径拼接。
 - ``LLM_API_KEY``：Bearer Token；兼容 ``OPENAI_API_KEY``。
-- ``LLM_API_KEY_BACKUP1``、``LLM_API_KEY_BACKUP2``：可选备用密钥；当主密钥请求返回 **429** / **503**（限流或服务暂不可用）时，
-  同一轮调用内自动换用下一密钥重试，不中断上层轮询流程。
+- ``LLM_API_KEY_BACKUP1``～``LLM_API_KEY_BACKUP4``：可选备用密钥；当主密钥请求返回 **429** / **503**（限流或服务暂不可用）时，
+  同一轮调用内按顺序换用下一密钥重试，不中断上层轮询流程。
 - ``LLM_MODEL``：模型名；兼容 ``OPENAI_MODEL``。
 - ``LLM_TIMEOUT_SEC``：秒，默认 ``120``。
 - ``LLM_SYSTEM_PROMPT``：系统提示，未设置则使用本模块内默认的表格提取说明。
@@ -71,15 +71,17 @@ import json
 import logging
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-# 主密钥遇限流（429）或服务暂不可用（503）时，在同一请求内换用下一备用密钥重试
-_LLM_KEY_ROTATION_HTTP_CODES = frozenset({429, 503})
 _LOG = logging.getLogger(__name__)
+
+# 与 ``file_flow.llm_openai`` 一致：主密钥后依次读取 BACKUP1～BACKUP4（最多共 5 个槽位）。
+_LLM_API_KEY_BACKUP_ENV_NAMES: tuple[str, ...] = tuple(f"LLM_API_KEY_BACKUP{i}" for i in range(1, 5))
 
 # 与同目录其它模块一致，支持非传统启动方式
 _repo_root = Path(__file__).resolve().parent
@@ -93,6 +95,13 @@ ensure_step_dotenv_loaded(_repo_root)
 from vlm_client import _extract_message_content, is_http_endpoint_url  # noqa: E402
 
 from pipeline_config import load_config_file, resolve_pipeline_config_path  # noqa: E402
+
+from file_flow.llm_openai import (  # noqa: E402
+    _llm_key_rotation_max_attempts,
+    _llm_key_rotation_sleep_sec,
+    _should_rotate_llm_api_key,
+    _should_rotate_on_transport_error,
+)
 
 
 def _resolve_input_path(raw: str, workspace: Path) -> Path:
@@ -177,7 +186,7 @@ class LlmEnvConfig:
 
     ``api_base`` 对应 ``LLM_API_BASE``：须为完整 POST endpoint URL（``http(s)://…``），直接用于请求。
 
-    ``api_keys`` 为按顺序尝试的 Bearer 密钥元组（主密钥 + ``LLM_API_KEY_BACKUP*``）；
+    ``api_keys`` 为按顺序尝试的 Bearer 密钥元组（主密钥 + ``LLM_API_KEY_BACKUP1``～``BACKUP4``，最多 5 个）；
     ``api_key`` 属性为首个密钥，便于日志与兼容旧代码。
     """
 
@@ -203,7 +212,7 @@ def _mask_secret(s: str | None) -> str:
 
 def _collect_llm_api_key_chain() -> tuple[str, ...]:
     """
-    组装 API 密钥尝试顺序：主密钥（LLM_API_KEY 或 OPENAI_API_KEY）后接 BACKUP1、BACKUP2。
+    组装 API 密钥尝试顺序：主密钥（LLM_API_KEY 或 OPENAI_API_KEY）后接 BACKUP1～BACKUP4。
     去重：与前面任一密钥相同的备用项会被跳过。
     """
     out: list[str] = []
@@ -212,7 +221,7 @@ def _collect_llm_api_key_chain() -> tuple[str, ...]:
     if primary:
         out.append(primary)
         seen.add(primary)
-    for name in ("LLM_API_KEY_BACKUP1", "LLM_API_KEY_BACKUP2"):
+    for name in _LLM_API_KEY_BACKUP_ENV_NAMES:
         v = _env_first(name)
         if v and v not in seen:
             out.append(v)
@@ -305,7 +314,8 @@ def call_openai_compatible_chat(
 ) -> str:
     """OpenAI 兼容 Chat Completions 文本对话，返回助手正文字符串。
 
-    若配置了多个 ``api_keys``，遇 **429** / **503** 时在同一调用内依次换密钥重试，不中断上层流程。
+    若配置了多个 ``api_keys``，遇限流类 HTTP、连接超时或无完整 HTTP 响应时，在同一调用内**环形**换密钥重试；
+    最大尝试次数与 ``file_flow.llm_openai`` 一致（见 ``LLM_KEY_ROTATION_MAX_ATTEMPTS``）。
     """
     if not cfg.api_base or not cfg.model:
         raise RuntimeError("缺少 LLM_API_BASE 或 LLM_MODEL（或兼容环境变量），无法调用大模型。")
@@ -315,14 +325,17 @@ def call_openai_compatible_chat(
             "LLM_API_BASE 须为以 http:// 或 https:// 开头的完整 Chat Completions POST URL。"
         )
     key_slots: list[str | None] = list(cfg.api_keys) if cfg.api_keys else [None]
-    if len(key_slots) > 1:
+    n = len(key_slots)
+    max_attempts = _llm_key_rotation_max_attempts(n)
+    if n > 1:
         _LOG.info(
-            "[环节:API请求] POST %s model=%s 超时=%ss 用户消息字符数=%s 密钥轮询槽位=%s",
+            "[环节:API请求] POST %s model=%s 超时=%ss 用户消息字符数=%s 密钥槽=%s 环形最多尝试=%s 次",
             url,
             cfg.model,
             cfg.timeout_sec,
             len(user_text),
-            len(key_slots),
+            n,
+            max_attempts,
         )
     else:
         _LOG.info(
@@ -337,7 +350,13 @@ def call_openai_compatible_chat(
         (cfg.system_prompt[:80] + "…") if len(cfg.system_prompt) > 80 else cfg.system_prompt,
     )
 
-    for idx, token in enumerate(key_slots):
+    idx = 0
+    attempt = 0
+    while attempt < max_attempts:
+        attempt += 1
+        slot_idx = idx % n
+        token = key_slots[slot_idx]
+        display_slot = slot_idx + 1
         try:
             text = _post_chat_completion_once(
                 url,
@@ -347,11 +366,12 @@ def call_openai_compatible_chat(
                 token,
                 cfg.timeout_sec,
             )
-            if idx > 0:
+            if attempt > 1 or display_slot != 1:
                 _LOG.info(
-                    "[环节:API响应] 使用第 %s/%s 个密钥成功，助手回复字符数=%s",
-                    idx + 1,
-                    len(key_slots),
+                    "[环节:API响应] 密钥槽 %s/%s（第 %s 次 POST）成功，助手回复字符数=%s",
+                    display_slot,
+                    n,
+                    attempt,
                     len(text),
                 )
             else:
@@ -359,15 +379,23 @@ def call_openai_compatible_chat(
             return text
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", errors="replace")
-            if e.code in _LLM_KEY_ROTATION_HTTP_CODES and idx < len(key_slots) - 1:
+            backoff = _llm_key_rotation_sleep_sec()
+            if _should_rotate_llm_api_key(e.code, detail) and n > 1 and attempt < max_attempts:
+                nxt = (idx + 1) % n
                 _LOG.warning(
-                    "[环节:密钥轮换] HTTP %s（疑似限流或服务暂不可用），换用下一密钥 %s/%s URL=%s 响应片段=%s",
+                    "[环节:密钥轮换] HTTP %s，%s 后换用密钥槽 %s/%s（第 %s/%s 次 POST，环形）URL=%s 响应片段=%s",
                     e.code,
-                    idx + 2,
-                    len(key_slots),
+                    f"休眠 {backoff}s" if backoff > 0 else "无休眠",
+                    nxt + 1,
+                    n,
+                    attempt + 1,
+                    max_attempts,
                     url,
                     detail[:300] + ("…" if len(detail) > 300 else ""),
                 )
+                idx = nxt
+                if backoff > 0:
+                    time.sleep(backoff)
                 continue
             _LOG.error(
                 "[环节:API错误] HTTP %s URL=%s 响应正文片段=%s",
@@ -376,9 +404,30 @@ def call_openai_compatible_chat(
                 detail[:500] + ("…" if len(detail) > 500 else ""),
             )
             raise RuntimeError(f"大模型 HTTP 错误 {e.code}: {detail}") from e
-        except urllib.error.URLError as e:
-            _LOG.error("[环节:API错误] 网络/URL 异常 URL=%s err=%s", url, e)
-            raise RuntimeError(f"大模型连接失败: {e}") from e
+        except (urllib.error.URLError, OSError) as e:
+            if n <= 1 or attempt >= max_attempts or not _should_rotate_on_transport_error(e):
+                _LOG.error("[环节:API错误] 网络/传输失败 URL=%s err=%s", url, e)
+                raise RuntimeError(f"大模型连接失败: {e}") from e
+            backoff = _llm_key_rotation_sleep_sec()
+            nxt = (idx + 1) % n
+            _LOG.warning(
+                "[环节:密钥轮换] 连接/读超时或无完整响应：%s；%s 后换用密钥槽 %s/%s（第 %s/%s 次 POST，环形）",
+                e,
+                f"休眠 {backoff}s" if backoff > 0 else "无休眠",
+                nxt + 1,
+                n,
+                attempt + 1,
+                max_attempts,
+            )
+            idx = nxt
+            if backoff > 0:
+                time.sleep(backoff)
+            continue
+
+    raise RuntimeError(
+        f"大模型请求已达最大尝试次数 {max_attempts}（{n} 个密钥槽环形轮询）仍未成功；"
+        f"可提高 LLM_KEY_ROTATION_MAX_ATTEMPTS 或检查网络/上游。"
+    )
 
 
 RESULT_FIELD = "大模型返回结果"

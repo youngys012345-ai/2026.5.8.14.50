@@ -20,7 +20,7 @@ py -3.12 -m venv venv312
 pip install -r requirements.txt
 ```
 
-复制并编辑 `config/pipeline.example.json` 为根目录 `pipeline.json`，按需填写 `mineru_project_root`、`input`、`output_dir` 等。大模型相关环境变量见各脚本模块顶部的文档字符串（`LLM_API_BASE` 为完整 Chat Completions POST URL；`LLM_API_KEY` 与可选的 `LLM_API_KEY_BACKUP1`、`LLM_API_KEY_BACKUP2` 在 429/503 时自动轮换；以及 `LLM_MODEL` 等）。
+复制并编辑 `config/pipeline.example.json` 为根目录 `pipeline.json`，按需填写 `mineru_project_root`、`input`、`output_dir` 等。大模型相关环境变量见各脚本模块顶部的文档字符串（`LLM_API_BASE` 为完整 Chat Completions POST URL；`LLM_API_KEY` 与可选的 `LLM_API_KEY_BACKUP1`～`LLM_API_KEY_BACKUP4` 在 429/503 等场景下按顺序自动轮换，最多共 5 个槽位；以及 `LLM_MODEL` 等）。
 
 ## 文件说明（核心 Python）
 
