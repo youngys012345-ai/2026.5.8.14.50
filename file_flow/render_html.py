@@ -9,9 +9,9 @@
 字段左侧展示 ``content`` 摘录；右侧「评审要点」来自 ``related_review_items`` 或 ``description``；
 「填答」来自 ``answer``。缺少填答时显示「（未填答）」。
 
-用法::
+用法（在包含 ``file_flow`` 包的上级目录执行）::
 
-    python file_flow/render_html.py -i file_flow/out/某案_answered.json -o file_flow/out/某案_review.html
+    python -m file_flow.render_html -i out/某案_answered.json -o out/某案_review.html
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-_ROOT = Path(__file__).resolve().parent.parent
+_FILE_FLOW_DIR = Path(__file__).resolve().parent
 
 
 def _field_review_prompt(field_obj: dict[str, Any]) -> str:
@@ -316,7 +316,7 @@ def main(argv: list[str] | None = None) -> int:
     ns = ap.parse_args(argv)
     return run_render_html(
         {},
-        workspace=_ROOT,
+        workspace=_FILE_FLOW_DIR,
         cwd=Path.cwd(),
         input_path=ns.input,
         output_path=ns.output,

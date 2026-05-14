@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-按 **document_types** 结构（与 ``file_flow/out/schema_example.json`` 一致）调用大模型，
+按 **document_types** 结构（与 ``out/schema_example.json`` 一致）调用大模型，
 从 PDF 全文中为各 ``fields`` 项摘录匹配内容，写入字段对象下的 ``content``。
 
 1. **公共上下文**：每项文书将 ``document_name`` 与文书级 ``description`` 拼成固定前缀。
@@ -22,7 +22,7 @@ import re
 from dataclasses import replace
 from typing import Any
 
-from file_flow.llm_openai import (
+from .llm_openai import (
     LlmEnvConfig,
     call_openai_compatible_chat,
 )

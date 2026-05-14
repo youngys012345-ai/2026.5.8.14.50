@@ -2,18 +2,18 @@
 # -*- coding: utf-8 -*-
 """
 在上一步 ``*_work.json``（或填答后的 JSON）含 ``document_types`` 与各字段 ``content`` 之后，
-读取 **评审标准清单** JSON（与 ``file_flow/out/standards_example.json`` 一致：顶层数组），
+读取 **评审标准清单** JSON（与 ``out/standards_example.json`` 一致：顶层数组），
 对其中**每一项**调用大模型：将 ``category``、``subcategory``、``content`` 拼成「分类上下文」，
 对照 ``standard`` 作答；将模型输出写入该条目的 ``review_answer``。
 
 最终写出**结果 JSON**：在输入工作 JSON 的完整拷贝上增加 ``standards_review`` 对象
 （含 ``items``：原字段 + ``review_answer``，以及 ``standards_path`` 等元数据），便于下游可视化。
 
-用法::
+用法（在包含 ``file_flow`` 包的上级目录执行）::
 
-    python file_flow/standards_llm_review.py -i file_flow/out/某案_work.json -o file_flow/out/某案_review.json
-    python file_flow/standards_llm_review.py --config pipeline.json
-    python file_flow/standards_llm_review.py --dry-run -i ... -o ...
+    python -m file_flow.standards_llm_review -i out/某案_work.json -o out/某案_review.json
+    python -m file_flow.standards_llm_review --config pipeline.json
+    python -m file_flow.standards_llm_review --dry-run -i ... -o ...
 """
 
 from __future__ import annotations
@@ -28,21 +28,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-_ROOT = Path(__file__).resolve().parent.parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+_FILE_FLOW_DIR = Path(__file__).resolve().parent
 
-from file_flow.llm_openai import (  # noqa: E402
+from .llm_openai import (  # noqa: E402
     LlmEnvConfig,
     call_openai_compatible_chat,
     configure_logging,
     is_http_endpoint_url,
     load_llm_config_for_file_flow,
 )
-from file_flow.pipeline_merge import load_merged_pipeline_config  # noqa: E402
-from file_flow.step_dotenv import ensure_step_dotenv_loaded  # noqa: E402
+from .naming import (
+    review_json_filename_for_base,
+    stem_base_from_stage_stem,
+)
+from .pipeline_merge import (
+    file_flow_root,
+    load_merged_pipeline_config,
+    resolve_pipeline_disk_path,
+)
+from .step_dotenv import ensure_step_dotenv_loaded  # noqa: E402
 
-ensure_step_dotenv_loaded(_ROOT)
+ensure_step_dotenv_loaded(_FILE_FLOW_DIR)
 
 _LOG = logging.getLogger(__name__)
 
@@ -238,11 +244,11 @@ def run_standards_llm_review_on_data(
 def _resolve_path(raw: Path, cwd: Path) -> Path:
     if raw.is_absolute():
         return raw.resolve()
-    for base in (cwd, _ROOT):
+    for base in (cwd, _FILE_FLOW_DIR):
         hit = (base / raw).resolve()
         if hit.is_file():
             return hit
-    return (_ROOT / raw).resolve()
+    return (_FILE_FLOW_DIR / raw).resolve()
 
 
 def run_standards_review(
@@ -280,7 +286,7 @@ def run_standards_review(
         if isinstance(ms, str) and ms.strip():
             st_raw = Path(ms.strip())
         else:
-            st_raw = workspace / "file_flow" / "out" / "standards_example.json"
+            st_raw = workspace / "out" / "standards_example.json"
 
     work_path = _resolve_path(Path(in_raw), cwd)
     standards_disk = _resolve_path(Path(st_raw), cwd)
@@ -291,12 +297,8 @@ def run_standards_review(
         if isinstance(mo, str) and mo.strip():
             out_raw = Path(mo.strip())
         else:
-            stem = work_path.stem
-            if stem.endswith("_work"):
-                stem = stem[: -len("_work")]
-            elif stem.endswith("_answered"):
-                stem = stem[: -len("_answered")]
-            out_raw = work_path.with_name(f"{stem}_review.json")
+            base = stem_base_from_stage_stem(work_path.stem, merged)
+            out_raw = work_path.with_name(review_json_filename_for_base(base, merged))
     out_path = Path(out_raw)
     out_path = out_path.resolve() if out_path.is_absolute() else (cwd / out_path).resolve()
 
@@ -359,21 +361,19 @@ def run_standards_review(
 
 
 def _resolve_pipeline_cli(cfg_arg: Path | None) -> Path | None:
-    from file_flow.pipeline_merge import repo_root, resolve_pipeline_disk_path  # noqa: PLC0415
-
-    return resolve_pipeline_disk_path(repo_root(), cfg_arg)
+    return resolve_pipeline_disk_path(file_flow_root(), cfg_arg)
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="按 standards 清单对案卷摘录逐项调用大模型评审，写出完整 review JSON")
-    ap.add_argument("--config", type=Path, default=None, help="管线 JSON；默认优先 file_flow/pipeline.json")
+    ap.add_argument("--config", type=Path, default=None, help="管线 JSON；默认使用 file_flow 目录下的 pipeline.json")
     ap.add_argument("-i", "--work-input", type=Path, default=None, help="上一步工作 JSON（*_work.json 等）")
     ap.add_argument(
         "-s",
         "--standards",
         type=Path,
         default=None,
-        help="评审标准清单 JSON；默认同 pipeline 的 file_flow_standards_json 或 file_flow/out/standards_example.json",
+        help="评审标准清单 JSON；默认同 pipeline 的 file_flow_standards_json 或 out/standards_example.json",
     )
     ap.add_argument("-o", "--output", type=Path, default=None, help="结果 JSON；默认同目录 {stem}_review.json")
     ap.add_argument("--dry-run", action="store_true", help="不请求 API，review_answer 写占位")
@@ -386,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--log-file", type=Path, default=None, help="追加日志文件 UTF-8")
     ns = ap.parse_args(argv)
 
-    env_loaded, dotenv_missing = ensure_step_dotenv_loaded(_ROOT)
+    env_loaded, dotenv_missing = ensure_step_dotenv_loaded(_FILE_FLOW_DIR)
     configure_logging(level=ns.log_level, log_file=ns.log_file)
     if dotenv_missing:
         _LOG.warning("[环节:环境] 未安装 python-dotenv，已跳过 .env")
@@ -398,7 +398,7 @@ def main(argv: list[str] | None = None) -> int:
 
     return run_standards_review(
         merged,
-        workspace=_ROOT,
+        workspace=_FILE_FLOW_DIR,
         cwd=Path.cwd(),
         work_input=ns.work_input,
         standards_path=ns.standards,

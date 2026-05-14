@@ -9,29 +9,22 @@ from pathlib import Path
 import pytest
 
 
-def test_resolve_pipeline_disk_path_prefers_file_flow(tmp_path: Path) -> None:
-    (tmp_path / "file_flow").mkdir(parents=True)
-    ff = tmp_path / "file_flow" / "pipeline.json"
-    ff.write_text(json.dumps({"backend": "opendataloader"}), encoding="utf-8")
-    root_p = tmp_path / "pipeline.json"
-    root_p.write_text(json.dumps({"backend": "mineru"}), encoding="utf-8")
+def test_resolve_pipeline_disk_path_uses_workspace_pipeline_json(tmp_path: Path) -> None:
+    p = tmp_path / "pipeline.json"
+    p.write_text(json.dumps({"backend": "opendataloader"}), encoding="utf-8")
 
     from file_flow.pipeline_merge import resolve_pipeline_disk_path
 
     got = resolve_pipeline_disk_path(tmp_path, None)
     assert got is not None
-    assert got.resolve() == ff.resolve()
+    assert got.resolve() == p.resolve()
 
 
-def test_resolve_pipeline_disk_path_fallback_root(tmp_path: Path) -> None:
-    root_p = tmp_path / "pipeline.json"
-    root_p.write_text(json.dumps({"backend": "mineru"}), encoding="utf-8")
-
+def test_resolve_pipeline_disk_path_none_when_missing(tmp_path: Path) -> None:
     from file_flow.pipeline_merge import resolve_pipeline_disk_path
 
     got = resolve_pipeline_disk_path(tmp_path, None)
-    assert got is not None
-    assert got.resolve() == root_p.resolve()
+    assert got is None
 
 
 def test_pymupdf_mode_extracts_text(tmp_path: Path) -> None:

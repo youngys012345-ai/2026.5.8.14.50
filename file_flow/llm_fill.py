@@ -4,18 +4,18 @@
 文件模式第二步：读取工作 JSON（``document_types`` / ``fields`` 结构，与 ``schema_example.json`` 一致），
 将文书名、字段名、``content`` 摘录与评审要点拼成用户消息，调用大模型，将回复写入字段对象下的 ``answer``。
 
-**仅依赖**仓库根的 ``pipeline_config.py`` + ``pipeline.json``（可选 ``--config``）以及本目录下的
+**仅依赖**本包内 ``pipeline_config.py``、``pipeline.json``（可选 ``--config``）以及
 ``llm_openai.py``、``pipeline_merge.py``、``step_dotenv.py``。
 
 评审要点优先取 ``related_review_items``（列表多行拼接）；若无则使用 ``description``。
 
 ``-i`` / ``-o`` 可省略：此时使用 ``pipeline.json`` 的 ``file_flow_llm_input``、``file_flow_llm_output``。
 
-用法::
+用法（在包含 ``file_flow`` 包的上级目录执行）::
 
-    python file_flow/llm_fill.py -i file_flow/out/某案_work.json -o file_flow/out/某案_answered.json
-    python file_flow/llm_fill.py --config pipeline.json
-    python file_flow/llm_fill.py --dry-run -i ... -o ...
+    python -m file_flow.llm_fill -i out/某案_work.json -o out/某案_answered.json
+    python -m file_flow.llm_fill --config pipeline.json
+    python -m file_flow.llm_fill --dry-run -i ... -o ...
 """
 
 from __future__ import annotations
@@ -27,21 +27,23 @@ import sys
 from pathlib import Path
 from typing import Any
 
-_ROOT = Path(__file__).resolve().parent.parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+_FILE_FLOW_DIR = Path(__file__).resolve().parent
 
-from file_flow.llm_openai import (  # noqa: E402
+from .llm_openai import (  # noqa: E402
     LlmEnvConfig,
     call_openai_compatible_chat,
     configure_logging,
     is_http_endpoint_url,
     load_llm_config_for_file_flow,
 )
-from file_flow.pipeline_merge import load_merged_pipeline_config  # noqa: E402
-from file_flow.step_dotenv import ensure_step_dotenv_loaded  # noqa: E402
+from .pipeline_merge import (
+    file_flow_root,
+    load_merged_pipeline_config,
+    resolve_pipeline_disk_path,
+)
+from .step_dotenv import ensure_step_dotenv_loaded  # noqa: E402
 
-ensure_step_dotenv_loaded(_ROOT)
+ensure_step_dotenv_loaded(_FILE_FLOW_DIR)
 
 _LOG = logging.getLogger(__name__)
 
@@ -185,11 +187,11 @@ def fill_answers(
 def _resolve_path(raw: Path, cwd: Path) -> Path:
     if raw.is_absolute():
         return raw.resolve()
-    for base in (cwd, _ROOT):
+    for base in (cwd, _FILE_FLOW_DIR):
         hit = (base / raw).resolve()
         if hit.is_file():
             return hit
-    return (_ROOT / raw).resolve()
+    return (_FILE_FLOW_DIR / raw).resolve()
 
 
 def run_llm_fill(
@@ -268,9 +270,7 @@ def run_llm_fill(
 
 
 def _resolve_pipeline_cli(cfg_arg: Path | None) -> Path | None:
-    from file_flow.pipeline_merge import repo_root, resolve_pipeline_disk_path  # noqa: PLC0415
-
-    return resolve_pipeline_disk_path(repo_root(), cfg_arg)
+    return resolve_pipeline_disk_path(file_flow_root(), cfg_arg)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -279,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
         "--config",
         type=Path,
         default=None,
-        help="管线 JSON；默认优先 file_flow/pipeline.json",
+        help="管线 JSON；默认使用 file_flow 目录下的 pipeline.json",
     )
     ap.add_argument("-i", "--input", type=Path, default=None, help="*_work.json；可改用 pipeline 的 file_flow_llm_input")
     ap.add_argument("-o", "--output", type=Path, default=None, help="写出路径；可改用 pipeline 的 file_flow_llm_output")
@@ -298,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ns = ap.parse_args(argv)
 
-    env_loaded, dotenv_missing = ensure_step_dotenv_loaded(_ROOT)
+    env_loaded, dotenv_missing = ensure_step_dotenv_loaded(_FILE_FLOW_DIR)
     configure_logging(level=ns.log_level, log_file=ns.log_file)
     if dotenv_missing:
         _LOG.warning(
@@ -312,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
 
     return run_llm_fill(
         merged,
-        workspace=_ROOT,
+        workspace=_FILE_FLOW_DIR,
         cwd=Path.cwd(),
         input_path=ns.input,
         output_path=ns.output,

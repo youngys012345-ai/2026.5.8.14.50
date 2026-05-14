@@ -1,37 +1,23 @@
 {
-  "__readme": "业务参数在本文件维护；未知键（以 __ 开头）为注释。合并优先级：本文件 < 环境变量（OPENDATALOADER_* 等，见项目根 .env.example）< 命令行。云端 Hybrid：云上 opendataloader-pdf-hybrid 须带 --force-ocr；本机 hybrid_force_ocr 仅作与启动参数对齐的说明。",
+  "__说明": "本文件均在 file_flow 目录内维护。在仓库根执行: python -m file_flow.pipeline_merge 。相对路径先相对 cwd 已存在路径，否则相对 file_flow/。未写 file_flow_auto_batch 时默认 true（批量跑 out 目录下全部案件）。",
 
-  "__输入输出": "input 可为单个 PDF 或目录（相对路径优先相对当前工作目录，其次项目根）。output_dir 为结果根目录；json/markdown 默认在其子目录 json、markdown，也可用 json_output_dir、markdown_output_dir 覆盖。",
+  "file_flow_steps": ["pdf_prepare", "llm_fill", "standards_review", "render_html"],
+  "file_flow_auto_batch": true,
 
-  "input": "eastmoney_bef4bcf5f2faff08a78d49945e4ac8983320f367c450720c87ab8cc6ed5726e4.pdf_1.pdf",
-  "output_dir": "output",
-  "json_output_dir": null,
-  "markdown_output_dir": null,
+  "file_flow_pdf_dir": "pdfs",
+  "file_flow_schema_json": "out/schema_example.json",
+  "file_flow_standards_json": "out/standards_example.json",
+  "file_flow_out_dir": "out",
 
-  "__运行选项": "recursive：目录输入时是否递归子目录。quiet：减少控制台输出。",
+  "file_flow_suffix_work": "_work",
+  "file_flow_suffix_answered": "_answered",
+  "file_flow_suffix_review": "_review",
 
-  "recursive": false,
-  "quiet": false,
+  "file_flow_llm_extract": false,
 
-  "__Markdown输出": "markdown_by_page：true 时在 markdown 目录额外生成 ``{文件名}_by_page.md``，按 PDF 页聚合正文并标注推断的页面标题与页码，便于下游大模型按页检索；false 则仅生成顺序版 ``{文件名}.md``。",
-
-  "markdown_by_page": true,
-
-  "__后端选择": "backend：mineru 表示 extract_pdf 用本地 MinerU；opendataloader 为 Java 包。**file_flow/pdf_prepare 暂不接 MinerU：若仍为 mineru 则自动用 PyMuPDF 抽字；建议 file_flow 场景下 backend 填 opendataloader。**",
+  "__OpenDataLoader": "全文抽取与 Hybrid；按需改 hybrid_url。",
 
   "backend": "opendataloader",
-
-  "__MinerU": "以下仅在 backend=mineru 时必填。mineru_project_root：含 mineru 包的仓库根。mineru_backend：传给 CLI 的 -b（如 pipeline）。mineru_api_url：常驻 API 根 URL；null 则每次临时起本地服务。mineru_model_source：local / huggingface / modelscope；null 时若自动生成 tools 则可能设为 local。mineru_tools_config_json：MINERU_TOOLS_CONFIG_JSON；null 时可按 mineru.local.json 或本地 models 自动生成临时 JSON。mineru_cli_timeout_sec：子进程超时秒数；null 表示不限。",
-
-  "mineru_project_root": "MinerU",
-  "mineru_backend": "pipeline",
-  "mineru_api_url": null,
-  "mineru_model_source": null,
-  "mineru_tools_config_json": null,
-  "mineru_cli_timeout_sec": null,
-
-  "__OpenDataLoader": "以下仅在 backend=opendataloader 时必填。hybrid_url：本地默认 127.0.0.1；连云端请在 .env 设 OPENDATALOADER_HYBRID_URL=http://云IP:端口（勿尾斜杠），或 SSH 隧道时保持此处 127.0.0.1。hybrid_health_timeout_sec：跨公网可调大。table_method default|cluster；reading_order xycut|off；hybrid docling-fast|hancom-ai|off；hybrid_mode auto|full；hybrid_timeout 毫秒 \"0\" 不限；hybrid_fallback；skip_health_check。hybrid_force_ocr：须 hybrid 进程带 --force-ocr 才生效。hybrid_ocr_lang：如 ch_sim,en。",
-
   "hybrid": "docling-fast",
   "hybrid_url": "http://127.0.0.1:5002",
   "hybrid_mode": "full",
@@ -41,44 +27,8 @@
   "skip_health_check": false,
   "hybrid_force_ocr": true,
   "hybrid_ocr_lang": "ch_sim,en",
-
-  "__Hybrid_SSL": "内网 EasyOCR 初始化若 HTTPS 证书校验失败：将企业 CA 与 certifi 合并为 PEM，填写 hybrid_ca_bundle（相对项目根或绝对路径）；见 scripts/start_docling_hybrid.ps1 注释。或在联网机预下载后复制 %USERPROFILE%\\.EasyOCR 到本机同路径。环境变量 HYBRID_CA_BUNDLE 优先于 hybrid_ca_bundle。",
-
-  "hybrid_ca_bundle": null,
-
   "table_method": "cluster",
   "reading_order": "xycut",
-
-  "__视觉与VLM": "visual_tagging：off / clip / vlm（vlm 需下方 API）。visual_min_score：标签置信度阈值。vlm_*：OpenAI 兼容视觉接口；密钥可用环境变量 OPENDATALOADER_VLM_API_KEY。vlm_fallback：页级转写 off/auto/force。vlm_page_transcribe_min_timeout_sec：页级请求超时取下限 max(vlm_timeout_sec, 本值)；仅在 vlm_fallback 非 off 时必填。",
-
-  "visual_tagging": "off",
-  "visual_min_score": 0.5,
-
-  "vlm_api_base": null,
-  "vlm_api_key": null,
-  "vlm_model": null,
-  "vlm_timeout_sec": null,
-  "vlm_chat_path": null,
-  "vlm_system_prompt": null,
-  "vlm_user_prompt": null,
-
-  "vlm_fallback": "off",
-  "vlm_fallback_threshold": 80,
-  "vlm_fallback_dpi": 120,
-  "vlm_page_transcribe_min_timeout_sec": null,
-
-  "vlm_page_system_prompt": null,
-  "vlm_page_user_prompt_template": null,
-
-  "__评审标准_LLM": "review_standard_llm_fill.py：抽取完成后按文书类型调用大模型填「大模型返回结果」。路径写在此处后可执行 python review_standard_llm_fill.py 无需再传文件参数；命令行仍可覆盖。",
-
-  "review_standard_json": "评审标准.json",
-  "review_standard_markdown": "output/markdown/eastmoney_bef4bcf5f2faff08a78d49945e4ac8983320f367c450720c87ab8cc6ed5726e4.pdf_1_by_page.md",
-  "review_standard_pdf_text_file": null,
-  "review_standard_output": null,
-
-  "__评审栏目问答": "review_standard_field_qa.py：读取含「大模型返回结果」的 *_llm_filled.json，逐子字段调用大模型写入「内容」。review_field_qa_input：输入 JSON；review_field_qa_output：输出路径，null 则默认为 {stem}_answered.json。",
-
-  "review_field_qa_input": null,
-  "review_field_qa_output": null
+  "quiet": false,
+  "markdown_by_page": true
 }

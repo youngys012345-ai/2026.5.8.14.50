@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-抽取管线配置：环境变量 + JSON 文件合并，供 extract_pdf 等脚本复用。
+file_flow 包内自包含副本：环境变量与 JSON 管线配置合并（与仓库根 ``pipeline_config.py`` 逻辑一致）。
 
 合并优先级（后者覆盖同名键）：pipeline.json → 环境变量（OPENDATALOADER_* 等）→ 命令行参数。
-业务默认值写在 pipeline.json；部署相关覆盖（如云端 hybrid URL）放在 .env / 环境变量。
+业务默认值写在 ``file_flow/pipeline.json``；部署相关覆盖放在 ``file_flow/.env`` 或环境变量。
 
 未设置 ``OPENDATALOADER_VLM_*`` 时，VLM 的 ``vlm_api_base`` 可从 ``LLM_API_BASE`` 读取（须为完整
-``http(s)`` Chat Completions POST URL，与评审脚本一致）；``LLM_MODEL``、``LLM_API_KEY`` 分别映射到
-``vlm_model``、``vlm_api_key``（便于一份 .env 共用）。
+``http(s)`` Chat Completions POST URL）；``LLM_MODEL``、``LLM_API_KEY`` 分别映射到
+``vlm_model``、``vlm_api_key``。
 """
 
 from __future__ import annotations
@@ -94,6 +94,7 @@ CONFIG_KEYS = frozenset(
         "file_flow_review_attach_schema_digest",
         "file_flow_pdf_text_backend",
         "file_flow_pdf_fallback_pymupdf",
+        # 产出 JSON 文件名后缀（不含 .json），默认 _work / _answered / _review
         "file_flow_suffix_work",
         "file_flow_suffix_answered",
         "file_flow_suffix_review",

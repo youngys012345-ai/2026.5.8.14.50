@@ -82,11 +82,14 @@
   "review_field_qa_input": null,
   "review_field_qa_output": null,
 
-  "__file_flow": "可选。一键编排：python file_flow/pipeline_merge.py。file_flow_steps 可含 standards_review（读 file_flow_standards_json，写出 *_review.json）。file_flow_auto_batch=true 时批量 llm_fill、standards_review、render（优先 *_review.json）。",
+  "__file_flow": "可选。在仓库根执行 python -m file_flow.pipeline_merge；默认读 file_flow/pipeline.json。未写 file_flow_auto_batch 时编排侧默认为 true。file_flow_suffix_* 控制 *_work / *_answered / *_review 等后缀名。",
 
   "file_flow_pdf_dir": null,
   "file_flow_schema_json": null,
   "file_flow_out_dir": null,
+  "file_flow_suffix_work": null,
+  "file_flow_suffix_answered": null,
+  "file_flow_suffix_review": null,
   "file_flow_llm_api_base": null,
   "file_flow_llm_model": null,
   "file_flow_llm_timeout_sec": null,
@@ -97,7 +100,7 @@
 
   "file_flow_steps": ["pdf_prepare", "llm_fill", "standards_review", "render_html"],
   "file_flow_llm_extract": false,
-  "file_flow_auto_batch": false,
+  "file_flow_auto_batch": true,
   "file_flow_render_html_input": null,
   "file_flow_render_html_output": null,
   "file_flow_render_title": null,

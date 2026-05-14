@@ -4,17 +4,17 @@
 文件模式第一步：从 PDF 目录读取 PDF，抽取全文（默认走 **OpenDataLoader**（Java + 可选 Hybrid、
 ``hybrid_fallback`` 兜底）；``backend=mineru`` 在 file_flow 中暂不支持，会自动改用 PyMuPDF）。
 可用 ``file_flow_pdf_text_backend=pymupdf`` 强制仅用本地 PyMuPDF。
-再按 **document_types** schema（与 ``file_flow/out/schema_example.json`` 一致）深拷贝生成工作 JSON。
+再按 **document_types** schema（与 ``out/schema_example.json`` 一致）深拷贝生成工作 JSON。
 
-schema **必须**包含非空 ``document_types`` 数组；默认 schema 路径为 ``file_flow/out/schema_example.json``
+schema **必须**包含非空 ``document_types`` 数组；默认 schema 路径为 ``out/schema_example.json``
 （可被 ``pipeline.json`` 的 ``file_flow_schema_json`` 或 ``--schema`` 覆盖）。
 
-用法::
+用法（在包含 ``file_flow`` 包的上级目录执行）::
 
-    python file_flow/pdf_prepare.py --pdf-dir ./pdfs --schema file_flow/out/schema_example.json --out file_flow/out
-    python file_flow/pdf_prepare.py --config file_flow/pipeline.json
-    python file_flow/pdf_prepare.py ... --llm-extract
-    python file_flow/pdf_prepare.py ... --llm-extract --dry-run
+    python -m file_flow.pdf_prepare --pdf-dir ./pdfs --schema out/schema_example.json --out ./out
+    python -m file_flow.pdf_prepare --config pipeline.json
+    python -m file_flow.pdf_prepare ... --llm-extract
+    python -m file_flow.pdf_prepare ... --llm-extract --dry-run
 """
 
 from __future__ import annotations
@@ -25,24 +25,23 @@ import sys
 from pathlib import Path
 from typing import Any
 
-_ROOT = Path(__file__).resolve().parent.parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+_FILE_FLOW_DIR = Path(__file__).resolve().parent
 
-from file_flow.pipeline_merge import (  # noqa: E402
+from .pipeline_merge import (  # noqa: E402
     load_merged_pipeline_config,
     resolve_pipeline_disk_path,
 )
-from file_flow.step_dotenv import ensure_step_dotenv_loaded  # noqa: E402
-from file_flow.llm_openai import (  # noqa: E402
+from .step_dotenv import ensure_step_dotenv_loaded  # noqa: E402
+from .llm_openai import (  # noqa: E402
     configure_logging,
     is_http_endpoint_url,
     load_llm_config_for_file_flow,
 )
-from file_flow.pdf_text_extract import extract_pdf_full_text_unified  # noqa: E402
-from file_flow.schema_llm_extract import enrich_work_json_with_llm_schema_extract  # noqa: E402
+from .pdf_text_extract import extract_pdf_full_text_unified  # noqa: E402
+from .naming import work_json_filename_for_stem  # noqa: E402
+from .schema_llm_extract import enrich_work_json_with_llm_schema_extract  # noqa: E402
 
-ensure_step_dotenv_loaded(_ROOT)
+ensure_step_dotenv_loaded(_FILE_FLOW_DIR)
 
 
 def _deep_copy(obj: Any) -> Any:
@@ -109,7 +108,7 @@ def _resolve(p: Path, cwd: Path) -> Path:
     hit = (cwd / p).resolve()
     if hit.exists():
         return hit
-    return (_ROOT / p).resolve()
+    return (_FILE_FLOW_DIR / p).resolve()
 
 
 def run_pdf_prepare(
@@ -149,14 +148,14 @@ def run_pdf_prepare(
         if isinstance(ms, str) and ms.strip():
             schema_raw = Path(ms.strip())
         else:
-            schema_raw = workspace / "file_flow" / "out" / "schema_example.json"
+            schema_raw = workspace / "out" / "schema_example.json"
     out_raw = out_dir
     if out_raw is None:
         mo = merged.get("file_flow_out_dir")
         if isinstance(mo, str) and mo.strip():
             out_raw = Path(mo.strip())
         else:
-            out_raw = workspace / "file_flow" / "out"
+            out_raw = workspace / "out"
 
     pdf_dir_p = _resolve(Path(pdf_dir_raw), cwd)
     schema_path = _resolve(Path(schema_raw), cwd)
@@ -180,7 +179,7 @@ def run_pdf_prepare(
         return 1
     if not is_document_types_schema(schema_data):
         print(
-            "错误: schema 须包含非空的 document_types 数组（结构见 file_flow/out/schema_example.json）",
+            "错误: schema 须包含非空的 document_types 数组（结构见 out/schema_example.json）",
             file=sys.stderr,
         )
         return 1
@@ -235,7 +234,7 @@ def run_pdf_prepare(
         if isinstance(text_meta, dict) and text_meta:
             meta_out.update(text_meta)
         work["_file_flow_meta"] = meta_out
-        dest = out_dir_p / f"{pdf.stem}_work.json"
+        dest = out_dir_p / work_json_filename_for_stem(pdf.stem, merged)
         dest.write_text(json.dumps(work, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"已写出: {dest} （全文 {len(text)} 字符，模式={mode_note}）")
 
@@ -248,16 +247,16 @@ def main(argv: list[str] | None = None) -> int:
         "--config",
         type=Path,
         default=None,
-        help="管线 JSON；默认优先 file_flow/pipeline.json，与 pipeline_config 合并后读取 file_flow_* 及 backend/hybrid 等键",
+        help="管线 JSON；默认使用 file_flow 目录下的 pipeline.json，与包内 pipeline_config 合并后读取 file_flow_* 及 backend/hybrid 等键",
     )
     ap.add_argument("--pdf-dir", type=Path, default=None, help="存放 PDF 的目录（可与 pipeline 中 file_flow_pdf_dir 二选一）")
     ap.add_argument(
         "--schema",
         type=Path,
         default=None,
-        help="schema JSON；未传时用 pipeline 的 file_flow_schema_json，否则 file_flow/out/schema_example.json",
+        help="schema JSON；未传时用 pipeline 的 file_flow_schema_json，否则 out/schema_example.json（相对 file_flow 目录）",
     )
-    ap.add_argument("--out", type=Path, default=None, help="输出目录；未传时用 pipeline 的 file_flow_out_dir 或 file_flow/out")
+    ap.add_argument("--out", type=Path, default=None, help="输出目录；未传时用 pipeline 的 file_flow_out_dir 或 out/")
     ap.add_argument(
         "--llm-extract",
         action="store_true",
@@ -277,24 +276,24 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--log-file", type=Path, default=None, help="启用 --llm-extract 时追加日志文件（UTF-8）")
     ns = ap.parse_args(argv)
 
-    env_loaded, dotenv_missing = ensure_step_dotenv_loaded(_ROOT)
+    env_loaded, dotenv_missing = ensure_step_dotenv_loaded(_FILE_FLOW_DIR)
     if dotenv_missing:
         print(
             "警告: 未安装 python-dotenv，已跳过 .env；请 pip install python-dotenv",
             file=sys.stderr,
         )
     elif env_loaded:
-        print(f"已加载环境文件: {len(env_loaded)} 个（仓库根 .env / 环节变量.env 等）")
+        print(f"已加载环境文件: {len(env_loaded)} 个（file_flow 目录 .env / 环节变量.env 等）")
 
     if ns.llm_extract:
         configure_logging(level=ns.log_level, log_file=ns.log_file)
 
-    disk = resolve_pipeline_disk_path(_ROOT, ns.config)
+    disk = resolve_pipeline_disk_path(_FILE_FLOW_DIR, ns.config)
     merged = load_merged_pipeline_config(disk if disk is not None and disk.is_file() else None)
 
     return run_pdf_prepare(
         merged,
-        workspace=_ROOT,
+        workspace=_FILE_FLOW_DIR,
         cwd=Path.cwd(),
         pdf_dir=ns.pdf_dir,
         schema=ns.schema,

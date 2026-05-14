@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-仅供 ``file_flow`` 使用：从仓库根与当前工作目录加载 ``.env`` / ``环节变量.env``。
+仅供 ``file_flow`` 使用：从 **file_flow 目录**与当前工作目录加载 ``.env`` / ``环节变量.env``。
 
-与仓库根 ``step_dotenv.py`` 逻辑一致，但独立维护，避免 ``file_flow`` 依赖父目录同名模块。
+与仓库根 ``step_dotenv.py`` 逻辑一致，但默认工作区为本包目录，避免依赖上级目录。
 """
 
 from __future__ import annotations
@@ -23,14 +23,14 @@ def ensure_step_dotenv_loaded(workspace: Path | None = None) -> tuple[list[Path]
     2. ``{workspace}/环节变量.env`` — 覆盖上一步写入的同名键；
     3. ``{cwd}/.env``、``{cwd}/环节变量.env`` — 后加载者覆盖前者。
 
-    ``workspace`` 应传**仓库根**（含 ``pipeline.json`` 的目录）。
+    ``workspace`` 为 ``None`` 时默认 **file_flow 包目录**（含 ``pipeline.json`` 的同级目录）。
     返回 ``(已加载文件的绝对路径列表, 是否因未安装 python-dotenv 而跳过)``。
     """
     global _done, _loaded_paths, _dotenv_unavailable
     if _done:
         return list(_loaded_paths), _dotenv_unavailable
 
-    root = workspace if workspace is not None else Path(__file__).resolve().parent.parent
+    root = workspace if workspace is not None else Path(__file__).resolve().parent
 
     try:
         from dotenv import load_dotenv
