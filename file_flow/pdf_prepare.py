@@ -114,6 +114,27 @@ def _resolve(p: Path, cwd: Path) -> Path:
     return (_FILE_FLOW_DIR / p).resolve()
 
 
+def resolve_llm_extract_enabled(merged: dict[str, Any], llm_extract: bool | None) -> bool:
+    """
+    是否启用 schema 大模型摘录。
+
+    - 命令行显式传入 ``True``/``False`` 时以命令行为准；
+    - 否则读 ``merged["file_flow_llm_extract"]``；**键未出现**时默认为 ``True``（与编排默认一致）；
+    - 显式 ``false``/``0``/``off`` 等则关闭。
+    """
+    if llm_extract is not None:
+        return llm_extract
+    raw = merged.get("file_flow_llm_extract")
+    if raw is None:
+        return True
+    if isinstance(raw, bool):
+        return raw
+    s = str(raw).strip().lower()
+    if s in ("0", "false", "no", "off"):
+        return False
+    return s in ("1", "true", "yes", "on")
+
+
 def run_pdf_prepare(
     merged: dict[str, Any],
     *,
@@ -129,11 +150,9 @@ def run_pdf_prepare(
 ) -> int:
     """
     可编程入口：按 ``merged`` 与路径参数生成各 PDF 的 ``*_work.json``。
-    ``llm_extract`` 为 ``None`` 时读取 ``merged["file_flow_llm_extract"]``（布尔）。
+    ``llm_extract`` 为 ``None`` 时由 ``resolve_llm_extract_enabled`` 解析（未配置 pipeline 键时默认开启摘录）。
     """
-    if llm_extract is None:
-        raw = merged.get("file_flow_llm_extract")
-        llm_extract = bool(raw) if isinstance(raw, bool) else str(raw).lower() in ("1", "true", "yes")
+    llm_extract = resolve_llm_extract_enabled(merged, llm_extract)
 
     if llm_extract:
         configure_logging(level=log_level, log_file=log_file)

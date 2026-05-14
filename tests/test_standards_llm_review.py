@@ -65,7 +65,31 @@ def test_run_on_data_dry_run_adds_standards_review() -> None:
     assert out["standards_review"]["digest_attached"] is True
 
 
-def test_render_html_includes_standards_section() -> None:
+def test_render_html_shows_field_description_under_title() -> None:
+    from file_flow.render_html import render_review_html
+
+    html = render_review_html(
+        {
+            "document_types": [
+                {
+                    "document_name": "测试文书",
+                    "fields": [
+                        {
+                            "field_name": "field_key",
+                            "description": "这是中文说明",
+                            "content": "摘录正文",
+                        }
+                    ],
+                }
+            ],
+        },
+        title="t",
+    )
+    assert "field_key" in html
+    assert "字段说明" in html
+    assert "这是中文说明" in html
+
+
     from file_flow.render_html import render_review_html
 
     html = render_review_html(
@@ -88,3 +112,5 @@ def test_render_html_includes_standards_section() -> None:
     )
     assert "按 standards 清单评审" in html
     assert "结论" in html
+    assert "评审标准（须对照）" in html
+    assert "评审结论" in html

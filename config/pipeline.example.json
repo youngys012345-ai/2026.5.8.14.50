@@ -99,7 +99,7 @@
   "file_flow_schema_extract_system_prompt": null,
 
   "file_flow_steps": ["pdf_prepare", "standards_review", "render_html"],
-  "file_flow_llm_extract": false,
+  "file_flow_llm_extract": true,
   "file_flow_auto_batch": true,
   "file_flow_render_html_input": null,
   "file_flow_render_html_output": null,

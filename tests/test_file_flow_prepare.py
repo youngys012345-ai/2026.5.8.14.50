@@ -6,7 +6,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from file_flow.pdf_prepare import build_work_json_from_schema_and_text, is_document_types_schema
+from file_flow.pdf_prepare import (
+    build_work_json_from_schema_and_text,
+    is_document_types_schema,
+    resolve_llm_extract_enabled,
+)
 
 
 def _minimal_document_types_schema() -> dict:
@@ -39,7 +43,15 @@ def _minimal_document_types_schema() -> dict:
     }
 
 
-def test_build_work_json_sets_content_and_answer_placeholders() -> None:
+def test_resolve_llm_extract_enabled_defaults_true_when_unset() -> None:
+    assert resolve_llm_extract_enabled({}, None) is True
+    assert resolve_llm_extract_enabled({"file_flow_llm_extract": True}, None) is True
+    assert resolve_llm_extract_enabled({"file_flow_llm_extract": False}, None) is False
+    assert resolve_llm_extract_enabled({"file_flow_llm_extract": "false"}, None) is False
+    assert resolve_llm_extract_enabled({}, False) is False
+    assert resolve_llm_extract_enabled({}, True) is True
+
+
     schema = _minimal_document_types_schema()
     out = build_work_json_from_schema_and_text(schema, "全文占位")
     f0 = out["document_types"][0]["fields"][0]

@@ -89,14 +89,14 @@ def _render_standards_review_section(data: dict[str, Any]) -> str:
             f"<article class='field sr-card'>"
             f"<header class='field-head'><h4>评审清单第 {idx} 项</h4></header>"
             f"<dl class='sr-dl'>"
-            f"<dt>category</dt><dd><pre class='pre-src'>{_html_escape_field(it.get('category'))}</pre></dd>"
-            f"<dt>subcategory</dt><dd><pre class='pre-src'>{_html_escape_field(it.get('subcategory'))}</pre></dd>"
-            f"<dt>content</dt><dd><pre class='pre-src'>{_html_escape_field(it.get('content'))}</pre></dd>"
-            f"<dt>standard</dt><dd><pre class='pre-question'>{_html_escape_field(it.get('standard'))}</pre></dd>"
-            f"<dt>score / penalty / number</dt><dd>"
+            f"<dt>类别</dt><dd><pre class='pre-src'>{_html_escape_field(it.get('category'))}</pre></dd>"
+            f"<dt>子类</dt><dd><pre class='pre-src'>{_html_escape_field(it.get('subcategory'))}</pre></dd>"
+            f"<dt>条目说明</dt><dd><pre class='pre-src'>{_html_escape_field(it.get('content'))}</pre></dd>"
+            f"<dt>评审标准（须对照）</dt><dd><pre class='pre-question'>{_html_escape_field(it.get('standard'))}</pre></dd>"
+            f"<dt>分值 / 扣分 / 编号</dt><dd>"
             f"{_html_escape_field(it.get('score'))} / {_html_escape_field(it.get('penalty'))} / {_html_escape_field(it.get('number'))}"
             f"</dd>"
-            f"<dt>review_answer</dt><dd><pre class='pre-answer'>{ra_s}</pre></dd>"
+            f"<dt>评审结论</dt><dd><pre class='pre-answer'>{ra_s}</pre></dd>"
             f"</dl></article>"
         )
     return (
@@ -133,6 +133,18 @@ def render_review_html(data: dict[str, Any], title: str = "案卷评审结果浏
                     continue
                 fn_raw = field_obj.get("field_name") or "（未命名字段）"
                 fn = html.escape(str(fn_raw))
+                desc_raw = field_obj.get("description")
+                desc_html = ""
+                if isinstance(desc_raw, str) and desc_raw.strip():
+                    desc_html = (
+                        "<p class='field-desc'><strong>字段说明</strong>："
+                        f"{html.escape(desc_raw.strip())}</p>"
+                    )
+                elif desc_raw is not None and str(desc_raw).strip():
+                    desc_html = (
+                        "<p class='field-desc'><strong>字段说明</strong>："
+                        f"{html.escape(str(desc_raw).strip())}</p>"
+                    )
                 q = html.escape(_field_review_prompt(field_obj))
                 c = html.escape(_field_content(field_obj))
                 a = html.escape(_field_answer(field_obj))
@@ -142,7 +154,7 @@ def render_review_html(data: dict[str, Any], title: str = "案卷评审结果浏
                     dt_s = f"<p class='hw'><strong>数据类型</strong>：{html.escape(str(dt_note).strip())}</p>"
                 field_cards.append(
                     f"<article class='field'>"
-                    f"<header class='field-head'><h4>{fn}</h4>{dt_s}</header>"
+                    f"<header class='field-head'><h4>{fn}</h4>{desc_html}{dt_s}</header>"
                     f"<div class='field-split'>"
                     f"<div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'>{c}</pre></div>"
                     f"<div class='col-qa'>"
@@ -174,6 +186,7 @@ def render_review_html(data: dict[str, Any], title: str = "案卷评审结果浏
     h2 {{ font-size: 1.05rem; margin-top: 1.25rem; }}
     h3 {{ font-size: 1.1rem; margin: 0 0 0.75rem 0; color: #1e3a8a; }}
     h4 {{ margin: 0; font-size: 1rem; }}
+    .field-desc {{ margin: 0.35rem 0 0 0; font-size: 0.88rem; color: #334155; line-height: 1.45; }}
     h5 {{ margin: 0 0 0.35rem 0; font-size: 0.8rem; color: #64748b; letter-spacing: 0.02em; }}
     section.doc {{ background: #fff; border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.25rem;
       box-shadow: 0 1px 3px rgba(0,0,0,.08); }}

@@ -25,7 +25,7 @@
   "file_flow_suffix_answered": "_answered",
   "file_flow_suffix_review": "_review",
 
-  "file_flow_llm_extract": false,
+  "file_flow_llm_extract": true,
 
   "backend": "opendataloader",
   "hybrid": "docling-fast",
