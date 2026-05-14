@@ -23,6 +23,13 @@ def test_collect_llm_api_key_chain_reads_primary_and_four_backups(monkeypatch: p
     assert _collect_llm_api_key_chain() == ("p", "b1", "b2", "b3", "b4")
 
 
+def test_collect_llm_api_key_chain_keeps_duplicate_backup_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "a")
+    monkeypatch.setenv("LLM_API_KEY_BACKUP1", "a")
+    monkeypatch.setenv("LLM_API_KEY_BACKUP2", "b")
+    assert _collect_llm_api_key_chain() == ("a", "a", "b")
+
+
 def test_should_rotate_on_429_and_503() -> None:
     assert _should_rotate_llm_api_key(429, "{}") is True
     assert _should_rotate_llm_api_key(503, "") is True

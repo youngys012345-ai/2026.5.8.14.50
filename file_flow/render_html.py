@@ -3,11 +3,13 @@
 """
 文件模式第三步（评测视图）：将工作/填答后的 JSON 渲染为单文件 HTML。
 
-每个栏目为左右分栏：左侧为「原文 / content 摘录」，右侧为「评审要点」与「填答 answer」，两侧顶部对齐，
-长文随整页滚动（不在栏内做固定视口截断）。
+- **无** ``standards_review``（或 ``items`` 为空）：每个字段左右分栏——左侧 ``content`` 摘录，右侧为
+  ``related_review_items`` / ``description`` 组成的「评审要点」及 ``answer`` 填答（无 ``answer`` 时显示「（未填答）」）。
 
-字段左侧展示 ``content`` 摘录；右侧「评审要点」来自 ``related_review_items`` 或 ``description``；
-「填答」来自 ``answer``。缺少填答时显示「（未填答）」。
+- **含** ``standards_review.items``（``standards_llm_review`` 产出）：字段区**仅**展示与 schema 对应的抽取
+  结果（``content``），不在字段右侧展示评审要点或填答（清单评审阶段字段下本不应有 ``answer``）。
+  页面**末尾**单独一节展示清单各项的「评审要求」（``standard``，缺省时回退 ``content``）与「评审结果」
+  （``review_answer``）。
 
 用法（在包含 ``file_flow`` 包的上级目录执行）::
 
@@ -62,8 +64,40 @@ def _html_escape_field(val: Any) -> str:
     return html.escape(str(val))
 
 
+def _has_standards_review(data: dict[str, Any]) -> bool:
+    """是否存在非空的 ``standards_review.items``（与字段区「仅抽取、末尾清单」布局联动）。"""
+    sr = data.get("standards_review")
+    if not isinstance(sr, dict):
+        return False
+    items = sr.get("items")
+    return isinstance(items, list) and len(items) > 0
+
+
+def _standards_item_requirement(row: dict[str, Any]) -> str:
+    """清单项「评审要求」正文：优先 ``standard``，否则回退 ``content``。"""
+    s = row.get("standard")
+    if isinstance(s, str) and s.strip():
+        return s.strip()
+    c = row.get("content")
+    if isinstance(c, str) and c.strip():
+        return c.strip()
+    return ""
+
+
+def _standards_item_context_line(row: dict[str, Any]) -> str:
+    """清单项分类上下文（辅读，非评审主体）。"""
+    parts: list[str] = []
+    for key in ("category", "subcategory"):
+        v = row.get(key)
+        if isinstance(v, str) and v.strip():
+            parts.append(v.strip())
+        elif v is not None and str(v).strip():
+            parts.append(str(v).strip())
+    return " / ".join(parts) if parts else ""
+
+
 def _render_standards_review_section(data: dict[str, Any]) -> str:
-    """若有 ``standards_review``，渲染清单评审块（供最终可视化）。"""
+    """若有非空 ``standards_review.items``，在页末渲染「评审要求 + 评审结果」清单块。"""
     sr = data.get("standards_review")
     if not isinstance(sr, dict):
         return ""
@@ -83,24 +117,26 @@ def _render_standards_review_section(data: dict[str, Any]) -> str:
     for idx, it in enumerate(items, start=1):
         if not isinstance(it, dict):
             continue
+        req = _standards_item_requirement(it)
+        req_s = html.escape(req) if req else "（未配置评审要求）"
         ra = it.get("review_answer")
         ra_s = html.escape(str(ra).strip() if isinstance(ra, str) else (str(ra) if ra is not None else ""))
+        ctx = _standards_item_context_line(it)
+        ctx_html = (
+            f"<p class='sr-context'>{html.escape(ctx)}</p>"
+            if ctx
+            else ""
+        )
         cards.append(
             f"<article class='field sr-card'>"
-            f"<header class='field-head'><h4>评审清单第 {idx} 项</h4></header>"
-            f"<dl class='sr-dl'>"
-            f"<dt>类别</dt><dd><pre class='pre-src'>{_html_escape_field(it.get('category'))}</pre></dd>"
-            f"<dt>子类</dt><dd><pre class='pre-src'>{_html_escape_field(it.get('subcategory'))}</pre></dd>"
-            f"<dt>条目说明</dt><dd><pre class='pre-src'>{_html_escape_field(it.get('content'))}</pre></dd>"
-            f"<dt>评审标准（须对照）</dt><dd><pre class='pre-question'>{_html_escape_field(it.get('standard'))}</pre></dd>"
-            f"<dt>分值 / 扣分 / 编号</dt><dd>"
-            f"{_html_escape_field(it.get('score'))} / {_html_escape_field(it.get('penalty'))} / {_html_escape_field(it.get('number'))}"
-            f"</dd>"
-            f"<dt>评审结论</dt><dd><pre class='pre-answer'>{ra_s}</pre></dd>"
+            f"<header class='field-head'><h4>清单项 {idx}</h4>{ctx_html}</header>"
+            f"<dl class='sr-dl sr-dl-pair'>"
+            f"<dt>评审要求</dt><dd><pre class='pre-question'>{req_s}</pre></dd>"
+            f"<dt>评审结果</dt><dd><pre class='pre-answer'>{ra_s}</pre></dd>"
             f"</dl></article>"
         )
     return (
-        f"<section class='doc standards-review'><h2>按 standards 清单评审</h2>"
+        f"<section class='doc standards-review'><h2>清单评审：评审要求与评审结果</h2>"
         f"{meta_html}<div class='fields'>{''.join(cards)}</div></section>"
     )
 
@@ -108,6 +144,7 @@ def _render_standards_review_section(data: dict[str, Any]) -> str:
 def render_review_html(data: dict[str, Any], title: str = "案卷评审结果浏览") -> str:
     """生成完整 HTML 文档字符串。"""
     blocks: list[str] = []
+    has_sr = _has_standards_review(data)
     meta = data.get("_file_flow_meta")
     if isinstance(meta, dict):
         meta_rows = "".join(
@@ -145,23 +182,34 @@ def render_review_html(data: dict[str, Any], title: str = "案卷评审结果浏
                         "<p class='field-desc'><strong>字段说明</strong>："
                         f"{html.escape(str(desc_raw).strip())}</p>"
                     )
-                q = html.escape(_field_review_prompt(field_obj))
                 c = html.escape(_field_content(field_obj))
-                a = html.escape(_field_answer(field_obj))
                 dt_note = field_obj.get("data_type")
                 dt_s = ""
                 if dt_note is not None and str(dt_note).strip():
                     dt_s = f"<p class='hw'><strong>数据类型</strong>：{html.escape(str(dt_note).strip())}</p>"
-                field_cards.append(
-                    f"<article class='field'>"
-                    f"<header class='field-head'><h4>{fn}</h4>{desc_html}{dt_s}</header>"
-                    f"<div class='field-split'>"
-                    f"<div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'>{c}</pre></div>"
-                    f"<div class='col-qa'>"
-                    f"<div class='qa-block'><h5>评审要点</h5><pre class='pre-question'>{q}</pre></div>"
-                    f"<div class='qa-block qa-answer'><h5>填答</h5><pre class='pre-answer'>{a}</pre></div>"
-                    f"</div></div></article>"
-                )
+                if has_sr:
+                    # standards_review 流程：字段下不展示 answer / 右侧评审栏；清单结论见页末一节
+                    field_cards.append(
+                        f"<article class='field field-standards-work'>"
+                        f"<header class='field-head'><h4>{fn}</h4>{desc_html}{dt_s}</header>"
+                        f"<div class='field-extract-only'>"
+                        f"<h5>与 schema 对应的抽取结果</h5>"
+                        f"<pre class='pre-source'>{c}</pre>"
+                        f"</div></article>"
+                    )
+                else:
+                    q = html.escape(_field_review_prompt(field_obj))
+                    a = html.escape(_field_answer(field_obj))
+                    field_cards.append(
+                        f"<article class='field'>"
+                        f"<header class='field-head'><h4>{fn}</h4>{desc_html}{dt_s}</header>"
+                        f"<div class='field-split'>"
+                        f"<div class='col-source'><h5>原文（抽取内容）</h5><pre class='pre-source'>{c}</pre></div>"
+                        f"<div class='col-qa'>"
+                        f"<div class='qa-block'><h5>评审要点</h5><pre class='pre-question'>{q}</pre></div>"
+                        f"<div class='qa-block qa-answer'><h5>填答</h5><pre class='pre-answer'>{a}</pre></div>"
+                        f"</div></div></article>"
+                    )
             sn = html.escape(doc_title)
             badge = f"<span class='badge'>{must_s}</span>" if must_s else ""
             blocks.append(
@@ -235,11 +283,17 @@ def render_review_html(data: dict[str, Any], title: str = "案卷评审结果浏
       border: 1px solid #86efac;
     }}
     p.hw {{ margin: 0.35rem 0 0 0; font-size: 0.85rem; color: #92400e; }}
+    article.field-standards-work {{ background: #fafafa; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 0.75rem; }}
+    article.field-standards-work:last-child {{ margin-bottom: 0; }}
+    .field-extract-only {{ min-width: 0; }}
+    .field-extract-only .pre-source {{ margin-top: 0.35rem; }}
     section.standards-review h2 {{ font-size: 1.05rem; color: #0f766e; margin-bottom: 0.5rem; }}
     p.sr-meta {{ font-size: 0.85rem; color: #475569; margin: 0 0 0.75rem 0; }}
+    p.sr-context {{ margin: 0.25rem 0 0 0; font-size: 0.82rem; color: #64748b; }}
     dl.sr-dl {{ margin: 0; display: grid; grid-template-columns: 8rem 1fr; gap: 0.35rem 0.75rem; font-size: 0.88rem; }}
     dl.sr-dl dt {{ color: #64748b; font-weight: 600; }}
     dl.sr-dl dd {{ margin: 0; min-width: 0; }}
+    dl.sr-dl-pair dt {{ align-self: start; padding-top: 0.35rem; }}
     .sr-card pre.pre-src {{ background: #fff; border: 1px solid #e2e8f0; white-space: pre-wrap; word-break: break-word; padding: 0.45rem 0.55rem; border-radius: 6px; }}
   </style>
 </head>
@@ -323,7 +377,7 @@ def run_render_html(
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="将评审 JSON 渲染为静态 HTML")
-    ap.add_argument("-i", "--input", type=Path, required=True, help="*_review.json 或 *_work.json（含 standards_review 时优先 review）")
+    ap.add_argument("-i", "--input", type=Path, required=True, help="*_review.json / *_work.json 等；含 standards_review.items 时字段区仅展示抽取结果，清单评审在页末")
     ap.add_argument("-o", "--output", type=Path, required=True, help="输出 .html 路径")
     ap.add_argument("--title", default="案卷评审结果浏览", help="页面标题")
     ns = ap.parse_args(argv)

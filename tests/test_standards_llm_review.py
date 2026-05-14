@@ -88,8 +88,11 @@ def test_render_html_shows_field_description_under_title() -> None:
     assert "field_key" in html
     assert "字段说明" in html
     assert "这是中文说明" in html
+    assert "评审要点" in html
+    assert "填答" in html
 
 
+def test_render_html_standards_review_end_section_requirement_and_result() -> None:
     from file_flow.render_html import render_review_html
 
     html = render_review_html(
@@ -110,7 +113,45 @@ def test_render_html_shows_field_description_under_title() -> None:
         },
         title="t",
     )
-    assert "按 standards 清单评审" in html
+    assert "清单评审：评审要求与评审结果" in html
     assert "结论" in html
-    assert "评审标准（须对照）" in html
-    assert "评审结论" in html
+    assert "评审要求" in html
+    assert "评审结果" in html
+    assert "评审标准（须对照）" not in html
+    assert "评审结论" not in html
+
+
+def test_render_html_with_standards_review_field_area_has_no_answer_column() -> None:
+    """含 standards_review 时字段区不渲染右侧评审要点 / 填答。"""
+    from file_flow.render_html import render_review_html
+
+    html = render_review_html(
+        {
+            "document_types": [
+                {
+                    "document_name": "文书甲",
+                    "fields": [
+                        {
+                            "field_name": "f1",
+                            "description": "说明",
+                            "content": "抽取甲",
+                            "related_review_items": ["要点A"],
+                            "answer": "不应展示",
+                        }
+                    ],
+                }
+            ],
+            "standards_review": {
+                "standards_path": "/p/s.json",
+                "items": [{"standard": "问", "review_answer": "答"}],
+            },
+        },
+        title="t",
+    )
+    assert "与 schema 对应的抽取结果" in html
+    assert "抽取甲" in html
+    assert "评审要点" not in html
+    assert "填答" not in html
+    assert "不应展示" not in html
+    assert "清单评审：评审要求与评审结果" in html
+    assert "答" in html

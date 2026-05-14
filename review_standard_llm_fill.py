@@ -213,19 +213,16 @@ def _mask_secret(s: str | None) -> str:
 def _collect_llm_api_key_chain() -> tuple[str, ...]:
     """
     组装 API 密钥尝试顺序：主密钥（LLM_API_KEY 或 OPENAI_API_KEY）后接 BACKUP1～BACKUP4。
-    去重：与前面任一密钥相同的备用项会被跳过。
+    不去重：与环形槽位一致，重复字符串仍各占一格。
     """
     out: list[str] = []
-    seen: set[str] = set()
     primary = _env_first("LLM_API_KEY", "OPENAI_API_KEY")
     if primary:
         out.append(primary)
-        seen.add(primary)
     for name in _LLM_API_KEY_BACKUP_ENV_NAMES:
         v = _env_first(name)
-        if v and v not in seen:
+        if v:
             out.append(v)
-            seen.add(v)
     return tuple(out)
 
 
@@ -350,13 +347,23 @@ def call_openai_compatible_chat(
         (cfg.system_prompt[:80] + "…") if len(cfg.system_prompt) > 80 else cfg.system_prompt,
     )
 
-    idx = 0
+    # 当前要 POST 的密钥槽下标（0=主密钥）；失败后变为下一槽，(n-1) 后回到 0。
+    key_slot_cursor = 0
     attempt = 0
     while attempt < max_attempts:
         attempt += 1
-        slot_idx = idx % n
+        slot_idx = key_slot_cursor % n
         token = key_slots[slot_idx]
         display_slot = slot_idx + 1
+        if n > 1:
+            _LOG.debug(
+                "[环节:API请求] 第 %s/%s 次 POST，密钥槽=%s/%s，Bearer=%s",
+                attempt,
+                max_attempts,
+                display_slot,
+                n,
+                _mask_secret(token),
+            )
         try:
             text = _post_chat_completion_once(
                 url,
@@ -381,7 +388,7 @@ def call_openai_compatible_chat(
             detail = e.read().decode("utf-8", errors="replace")
             backoff = _llm_key_rotation_sleep_sec()
             if _should_rotate_llm_api_key(e.code, detail) and n > 1 and attempt < max_attempts:
-                nxt = (idx + 1) % n
+                nxt = (key_slot_cursor + 1) % n
                 _LOG.warning(
                     "[环节:密钥轮换] HTTP %s，%s 后换用密钥槽 %s/%s（第 %s/%s 次 POST，环形）URL=%s 响应片段=%s",
                     e.code,
@@ -393,7 +400,7 @@ def call_openai_compatible_chat(
                     url,
                     detail[:300] + ("…" if len(detail) > 300 else ""),
                 )
-                idx = nxt
+                key_slot_cursor = nxt
                 if backoff > 0:
                     time.sleep(backoff)
                 continue
@@ -409,7 +416,7 @@ def call_openai_compatible_chat(
                 _LOG.error("[环节:API错误] 网络/传输失败 URL=%s err=%s", url, e)
                 raise RuntimeError(f"大模型连接失败: {e}") from e
             backoff = _llm_key_rotation_sleep_sec()
-            nxt = (idx + 1) % n
+            nxt = (key_slot_cursor + 1) % n
             _LOG.warning(
                 "[环节:密钥轮换] 连接/读超时或无完整响应：%s；%s 后换用密钥槽 %s/%s（第 %s/%s 次 POST，环形）",
                 e,
@@ -419,7 +426,7 @@ def call_openai_compatible_chat(
                 attempt + 1,
                 max_attempts,
             )
-            idx = nxt
+            key_slot_cursor = nxt
             if backoff > 0:
                 time.sleep(backoff)
             continue

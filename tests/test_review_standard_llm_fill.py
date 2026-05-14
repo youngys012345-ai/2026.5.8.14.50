@@ -80,7 +80,8 @@ def test_load_llm_config_from_env_collects_backup_keys(monkeypatch: pytest.Monke
     assert c.api_key == "primary"
 
 
-def test_load_llm_config_from_env_backup_keys_dedup(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_llm_config_from_env_backup_keys_keep_duplicate_slots(monkeypatch: pytest.MonkeyPatch) -> None:
+    """与主密钥相同的 BACKUP 仍占槽位，便于环形轮询走满 主→备1→…→备4→主。"""
     monkeypatch.setenv("LLM_API_BASE", "https://x/v1/chat/completions")
     monkeypatch.setenv("LLM_MODEL", "m")
     monkeypatch.setenv("LLM_API_KEY", "same")
@@ -89,7 +90,7 @@ def test_load_llm_config_from_env_backup_keys_dedup(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("LLM_API_KEY_BACKUP3", "other")
     monkeypatch.setenv("LLM_API_KEY_BACKUP4", "last")
     c = load_llm_config_from_env()
-    assert c.api_keys == ("same", "other", "last")
+    assert c.api_keys == ("same", "same", "other", "other", "last")
 
 
 def test_call_openai_compatible_chat_retries_on_429_with_next_key() -> None:

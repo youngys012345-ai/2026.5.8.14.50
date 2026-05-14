@@ -17,7 +17,7 @@ file_flow 专用：OpenAI 兼容 Chat Completions 文本调用、日志、连接
 - **完整 POST URL**（须含路径 ``.../chat/completions``），将原样使用；或
 - **常见根地址** ``https://主机/.../v1``（可无尾斜杠），将**自动**补全为 ``.../v1/chat/completions``。
 
-若配置了 ``LLM_API_KEY`` 与 ``LLM_API_KEY_BACKUP1``～``LLM_API_KEY_BACKUP4``（可选，共最多 **5** 个槽位：主密钥 + 4 个备用），遇 **429 / 403**（部分厂商 QPM 限流）、**503** 等可重试类错误时，
+若配置了 ``LLM_API_KEY`` 与 ``LLM_API_KEY_BACKUP1``～``LLM_API_KEY_BACKUP4``（可选，最多 **5** 个**槽位**：主 + 4 备，按环境变量顺序保留、**不因值相同而合并**），遇 **429 / 403**（部分厂商 QPM 限流）、**503** 等可重试类错误时，
 会在**同一请求内**依次换密钥重试；部分厂商对 QPM 返回 **400** 且正文含限流关键词时也会轮换。
 可选 ``LLM_KEY_ROTATION_SLEEP_SEC``：换 key 前休眠秒数（默认 ``0``；QPM 场景可设为 ``0.5``～``2``）。
 可选 ``LLM_HTTP_WAIT_LOG_INTERVAL_SEC``：单次请求在等待网关响应期间，每隔多少秒打一条 **WARNING** 心跳日志（默认 ``25``，设为 ``0`` 关闭）；便于排查「长时间无输出直至超时」。
@@ -43,7 +43,7 @@ from urllib.parse import urlparse
 
 _LOG = logging.getLogger(__name__)
 
-# 遇限流或临时故障时，在同一请求内依次尝试主密钥 LLM_API_KEY → LLM_API_KEY_BACKUP1 → … → BACKUP4。
+# 遇限流或临时故障时，在同一请求内按槽位环形尝试：主 LLM_API_KEY → BACKUP1 → … → BACKUP4 → 再回到主（槽位与 .env 顺序一致，不因密钥字符串相同而跳过）。
 _LLM_API_KEY_BACKUP_ENV_NAMES: tuple[str, ...] = tuple(f"LLM_API_KEY_BACKUP{i}" for i in range(1, 5))
 # 含 403：部分网关/模型在 QPM 超限时返回 403（正文可能为空或不含关键词），与 429 同样轮换备用密钥。
 _LLM_KEY_ROTATION_HTTP_CODES = frozenset({403, 408, 429, 502, 503, 504, 529})
@@ -271,17 +271,18 @@ def _mask_secret(s: str | None) -> str:
 
 
 def _collect_llm_api_key_chain() -> tuple[str, ...]:
+    """
+    主密钥后按 BACKUP1～BACKUP4 顺序追加；**不去重**。
+    与「主→备1→…→备4→再回到主」的环形槽位一致：即使两槽字符串相同也各占一格，避免轮询被压缩成短链。
+    """
     out: list[str] = []
-    seen: set[str] = set()
     primary = _env_first("LLM_API_KEY", "OPENAI_API_KEY")
     if primary:
         out.append(primary)
-        seen.add(primary)
     for name in _LLM_API_KEY_BACKUP_ENV_NAMES:
         v = _env_first(name)
-        if v and v not in seen:
+        if v:
             out.append(v)
-            seen.add(v)
     return tuple(out)
 
 
@@ -541,13 +542,23 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
         (combined[:120] + "…") if len(combined) > 120 else combined,
     )
 
-    idx = 0
+    # 当前要 POST 的密钥槽下标（0=主密钥）；失败后变为下一槽，(n-1) 后回到 0。
+    key_slot_cursor = 0
     attempt = 0
     while attempt < max_attempts:
         attempt += 1
-        slot_idx = idx % n
+        slot_idx = key_slot_cursor % n
         token = key_slots[slot_idx]
         display_slot = slot_idx + 1
+        if n > 1:
+            _LOG.debug(
+                "[环节:API请求] 第 %s/%s 次 POST，密钥槽=%s/%s，Bearer=%s",
+                attempt,
+                max_attempts,
+                display_slot,
+                n,
+                _mask_secret(token),
+            )
         try:
             text = _post_chat_completion_once(
                 url,
@@ -575,7 +586,7 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
             detail = e.read().decode("utf-8", errors="replace")
             backoff = _llm_key_rotation_sleep_sec()
             if _should_rotate_llm_api_key(e.code, detail) and n > 1 and attempt < max_attempts:
-                nxt = (idx + 1) % n
+                nxt = (key_slot_cursor + 1) % n
                 _LOG.warning(
                     "[环节:密钥轮换] HTTP %s，%s 后换用密钥槽 %s/%s（第 %s/%s 次 POST，环形）URL=%s 响应片段=%s",
                     e.code,
@@ -587,7 +598,7 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
                     url,
                     detail[:300] + ("…" if len(detail) > 300 else ""),
                 )
-                idx = nxt
+                key_slot_cursor = nxt
                 if backoff > 0:
                     time.sleep(backoff)
                 continue
@@ -603,7 +614,7 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
                 _LOG.error("[环节:API错误] 网络/传输失败 URL=%s err=%s", url, e)
                 raise RuntimeError(f"大模型连接失败: {e}") from e
             backoff = _llm_key_rotation_sleep_sec()
-            nxt = (idx + 1) % n
+            nxt = (key_slot_cursor + 1) % n
             _LOG.warning(
                 "[环节:密钥轮换] 连接/读超时或无完整响应：%s；%s 后换用密钥槽 %s/%s（第 %s/%s 次 POST，环形）",
                 e,
@@ -613,7 +624,7 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
                 attempt + 1,
                 max_attempts,
             )
-            idx = nxt
+            key_slot_cursor = nxt
             if backoff > 0:
                 time.sleep(backoff)
             continue
