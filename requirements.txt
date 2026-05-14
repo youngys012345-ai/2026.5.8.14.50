@@ -12,6 +12,7 @@
 #   - 完全离线：在可联网机器上用相同 hybrid_ocr_lang 启动过一次 hybrid 完成下载后，把该用户目录下的 .EasyOCR 文件夹复制到内网机
 #     同一账户的 %USERPROFILE%\.EasyOCR（路径须一致）。
 
+# file_flow：naming.py 仅用标准库；step_dotenv 需 python-dotenv（下列已包含）。
 opendataloader-pdf[hybrid]>=2.4,<3
 pymupdf>=1.24.0
 Pillow>=10.0.0

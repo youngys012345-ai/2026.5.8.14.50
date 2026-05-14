@@ -1,5 +1,17 @@
 {
-  "__说明": "本文件均在 file_flow 目录内维护。在仓库根执行: python -m file_flow.pipeline_merge 。相对路径先相对 cwd 已存在路径，否则相对 file_flow/。未写 file_flow_auto_batch 时默认 true（批量跑 out 目录下全部案件）。",
+  "__总览": "本目录为 file_flow 自包含工作区：pipeline.json、.env（可选）、pdfs/、out/ 均建议放在 file_flow/ 下。在仓库根执行: python -m file_flow.pipeline_merge。环境变量合并优先级高于本文件同名键。",
+
+  "__路径规则": "相对路径：若 cwd 下已存在该相对路径则用之；否则相对于本 file_flow/ 目录解析。绝对路径直接使用。",
+
+  "__环境变量": "仅加载与本文件同级的 .env 与 环节变量.env（不读上一级目录、不读 cwd 下的 .env）。请将 LLM_API_BASE、LLM_API_KEY、LLM_MODEL 等写入 file_flow/.env。依赖包见 requirements.txt 中的 python-dotenv。",
+
+  "__步骤编排": "file_flow_steps 为子步骤名列表。未配置 file_flow_auto_batch 时编排默认为 true：对 file_flow_out_dir 下所有匹配后缀的 JSON 批量执行 llm_fill / standards_review / render_html。",
+
+  "__产出命名": "file_flow_suffix_* 控制各阶段 JSON 文件名中 stem 与 .json 之间的后缀（须为 _字母数字 形式），须与批量 glob 一致。",
+
+  "__pdf_prepare": "file_flow_pdf_dir 放原始 PDF；file_flow_schema_json 为 document_types 结构；写出到 file_flow_out_dir，文件名为 {pdf_stem}{suffix_work}.json。file_flow_llm_extract=true 时在一步内做大模型字段抽取。",
+
+  "__OpenDataLoader": "backend、hybrid*、table_method、reading_order 等与全文抽取一致；按需修改 hybrid_url。",
 
   "file_flow_steps": ["pdf_prepare", "llm_fill", "standards_review", "render_html"],
   "file_flow_auto_batch": true,
@@ -14,8 +26,6 @@
   "file_flow_suffix_review": "_review",
 
   "file_flow_llm_extract": false,
-
-  "__OpenDataLoader": "全文抽取与 Hybrid；按需改 hybrid_url。",
 
   "backend": "opendataloader",
   "hybrid": "docling-fast",
