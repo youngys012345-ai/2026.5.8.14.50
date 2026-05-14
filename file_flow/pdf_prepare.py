@@ -4,7 +4,8 @@
 文件模式第一步：从 PDF 目录读取 PDF，抽取全文（默认走 **OpenDataLoader**（Java + 可选 Hybrid、
 ``hybrid_fallback`` 兜底）；``backend=mineru`` 在 file_flow 中暂不支持，会自动改用 PyMuPDF）。
 可用 ``file_flow_pdf_text_backend=pymupdf`` 强制仅用本地 PyMuPDF。
-再按 **document_types** schema（与 ``out/schema_example.json`` 一致）深拷贝生成工作 JSON。
+再按 **document_types** schema（与 ``out/schema_example.json`` 一致）深拷贝生成工作 JSON；
+全文写入与 ``*_work.json`` 同目录的 ``{pdf_stem}_fulltext.txt``，**不**再把整篇 PDF 文本复制进各字段 ``content``（非 LLM 模式下 ``content`` 保持空串，供后续环节或人工填写）。
 
 schema **必须**包含非空 ``document_types`` 数组；默认 schema 路径为 ``out/schema_example.json``
 （可被 ``pipeline.json`` 的 ``file_flow_schema_json`` 或 ``--schema`` 覆盖）。
@@ -201,8 +202,13 @@ def run_pdf_prepare(
         except (RuntimeError, OSError) as e:
             print(f"错误: 全文抽取失败 {pdf.name}: {e}", file=sys.stderr)
             return 1
+        # 全文单独落盘，工作 JSON 仅保留字段骨架；大模型抽取时再读入全文拼 prompt 写回各 content
+        fulltext_basename = f"{pdf.stem}_fulltext.txt"
+        fulltext_path = out_dir_p / fulltext_basename
+        fulltext_path.write_text(text, encoding="utf-8")
+
         work = build_work_json_skeleton(schema_data)
-        mode_note = "fulltext_placeholder"
+        mode_note = "fulltext_file_only"
         if llm_extract:
             base_cfg = load_llm_config_for_file_flow(merged)
             dry = dry_run
@@ -222,21 +228,22 @@ def run_pdf_prepare(
                 print(f"错误: 大模型抽取失败: {e}", file=sys.stderr)
                 return 1
             mode_note = "llm_schema_extract_dry_run" if dry else "llm_schema_extract"
-        else:
-            apply_full_text_to_all_contents(work, text)
 
         meta_out: dict[str, Any] = {
             "pdf_path": str(pdf.resolve()),
             "全文字符数": len(text),
             "schema_path": str(schema_path.resolve()),
             "内容填充模式": mode_note,
+            "file_flow_pdf_fulltext_file": fulltext_basename,
         }
         if isinstance(text_meta, dict) and text_meta:
             meta_out.update(text_meta)
         work["_file_flow_meta"] = meta_out
         dest = out_dir_p / work_json_filename_for_stem(pdf.stem, merged)
         dest.write_text(json.dumps(work, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"已写出: {dest} （全文 {len(text)} 字符，模式={mode_note}）")
+        print(
+            f"已写出: {dest} （全文 {len(text)} 字符，全文文件={fulltext_path.name}，模式={mode_note}）",
+        )
 
     return 0
 
@@ -260,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--llm-extract",
         action="store_true",
-        help="启用大模型按字段写入 content（否则将整篇全文写入各 field 的 content 作占位）",
+        help="启用大模型按字段写入 content（否则各 field 的 content 为空；全文见同目录 *_fulltext.txt）",
     )
     ap.add_argument(
         "--dry-run",

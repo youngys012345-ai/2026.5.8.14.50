@@ -101,6 +101,7 @@ def summarize_fill_user_prompt_for_log(user_text: str) -> str:
 
 
 def load_standards_standard_by_index(
+    merged: dict[str, Any],
     *,
     workspace: Path,
     cwd: Path,
