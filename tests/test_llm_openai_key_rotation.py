@@ -217,8 +217,8 @@ def test_last_key_429_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         call_openai_compatible_chat(cfg, "x")
 
 
-def test_transport_timeout_rotates_and_wraps_to_first_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """连接超时类 URLError：换下一槽；第 5 次回到第一个槽并成功。"""
+def test_transport_timeout_rotates_linear_through_all_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """连接超时：线性逐槽切换，全部超时则报错。"""
     monkeypatch.setattr("file_flow.llm_openai.time.sleep", lambda _s: None)
     tokens_seen: list[str | None] = []
 
@@ -231,24 +231,24 @@ def test_transport_timeout_rotates_and_wraps_to_first_key(monkeypatch: pytest.Mo
         **kwargs: object,
     ) -> str:
         tokens_seen.append(api_key_token)
-        if len(tokens_seen) < 5:
-            raise urllib.error.URLError("timed out")
-        return "ok"
+        raise urllib.error.URLError("timed out")
 
     monkeypatch.setattr("file_flow.llm_openai._post_chat_completion_once", fake_post)
     cfg = LlmEnvConfig(
         api_base="http://127.0.0.1/v1/chat/completions",
-        api_keys=("k0", "k1"),
+        api_keys=("k0", "k1", "k2"),
         model="m",
         timeout_sec=1.0,
         system_prompt="s",
     )
-    assert call_openai_compatible_chat(cfg, "x") == "ok"
-    assert tokens_seen == ["k0", "k1", "k0", "k1", "k0"]
+    with pytest.raises(RuntimeError, match="最大尝试次数"):
+        call_openai_compatible_chat(cfg, "x")
+    # 每个密钥槽恰好尝试一次，不回头
+    assert tokens_seen == ["k0", "k1", "k2"]
 
 
-def test_http_429_wraps_ring_until_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """两槽均 429 多轮后回到第一槽成功（环形）。"""
+def test_http_429_rotates_linear_until_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """多槽 429：线性逐槽换，最后一个槽成功即返回，不回头。"""
     monkeypatch.setattr("file_flow.llm_openai.time.sleep", lambda _s: None)
     tokens_seen: list[str | None] = []
 
@@ -261,20 +261,21 @@ def test_http_429_wraps_ring_until_success(monkeypatch: pytest.MonkeyPatch) -> N
         **kwargs: object,
     ) -> str:
         tokens_seen.append(api_key_token)
-        if len(tokens_seen) < 5:
+        if len(tokens_seen) < 3:
             raise urllib.error.HTTPError(url, 429, "Too Many", hdrs={}, fp=io.BytesIO(b"{}"))
         return "ok"
 
     monkeypatch.setattr("file_flow.llm_openai._post_chat_completion_once", fake_post)
     cfg = LlmEnvConfig(
         api_base="http://127.0.0.1/v1/chat/completions",
-        api_keys=("k0", "k1"),
+        api_keys=("k0", "k1", "k2"),
         model="m",
         timeout_sec=1.0,
         system_prompt="s",
     )
     assert call_openai_compatible_chat(cfg, "x") == "ok"
-    assert tokens_seen == ["k0", "k1", "k0", "k1", "k0"]
+    # 3 个槽线性遍历，第 3 个成功，不回头
+    assert tokens_seen == ["k0", "k1", "k2"]
 
 
 def test_stops_after_max_attempts_when_all_keys_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:

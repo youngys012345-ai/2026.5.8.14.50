@@ -12,7 +12,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from file_flow.urlutil import client_base_url_for_local_service
+from file_flow.opendataloader_adapter import client_base_url_for_local_service
 
 
 class OpenDataLoaderExtractionError(RuntimeError):

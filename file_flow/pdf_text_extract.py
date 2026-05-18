@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from .document_export import document_to_markdown
-from .urlutil import client_base_url_for_local_service
+from .opendataloader_adapter import client_base_url_for_local_service
 from .opendataloader_adapter import (
     OpenDataLoaderExtractionError,
     load_opendataloader_document,

@@ -1,0 +1,39 @@
+{
+  "schema_version": "xxx",
+  "standard_version": "xxx",
+  "case_type": "xxx",
+  "description": "xxx",
+  "document_types": [
+    {
+      "document_name": "string",
+      "document_type": "string",
+      "description": "string",
+      "required": "boolean",
+      "related_review_items": [
+        "1.4",
+        "4.2.1",
+        "4.2.2"
+      ],
+      "fields": [
+        {
+          "field_name": "string",
+          "description": "string",
+          "data_type": "string",
+          "required": "boolean",
+          "related_review_items": [
+            "2.1",
+            "3.1",
+            "4.2.4"
+          ]
+        }
+      ]
+    }
+  ],
+  "covered_review_items": [
+    "string"
+  ],
+  "required_documents": [
+    "string"
+  ],
+  "created_at": "string"
+}

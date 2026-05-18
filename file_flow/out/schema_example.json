@@ -10,7 +10,9 @@
         "description": "string",
         "required": "boolean",
         "related_review_items": [
-          "string"
+          "1.4",
+          "4.2.1",
+          "4.2.2"
         ],
         "fields": [
           {
@@ -19,7 +21,9 @@
             "data_type": "string",
             "required": "boolean",
             "related_review_items": [
-              "string"
+              "2.1",
+              "3.1",
+              "4.2.4"
             ]
           }
         ]

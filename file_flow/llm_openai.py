@@ -21,7 +21,8 @@ file_flow 专用：OpenAI 兼容 Chat Completions 文本调用、日志、连接
 会在**同一请求内**依次换密钥重试；部分厂商对 QPM 返回 **400** 且正文含限流关键词时也会轮换。
 可选 ``LLM_KEY_ROTATION_SLEEP_SEC``：换 key 前休眠秒数（默认 ``0``；QPM 场景可设为 ``0.5``～``2``）。
 可选 ``LLM_HTTP_WAIT_LOG_INTERVAL_SEC``：单次请求在等待网关响应期间，每隔多少秒打一条 **WARNING** 心跳日志（默认 ``25``，设为 ``0`` 关闭）；便于排查「长时间无输出直至超时」。
-可选 ``LLM_KEY_ROTATION_MAX_ATTEMPTS``：同一轮用户消息下最多尝试多少次 POST（含**环形**从第 5 个密钥回到第 1 个）；默认 ``max(密钥槽位数×8, 24)``；仅 1 个密钥时为 ``1``（避免对同一密钥死循环）。
+可选 ``LLM_KEY_ROTATION_MAX_ATTEMPTS``：同一轮用户消息下最多尝试多少次 POST
+（**线性**逐槽切换，耗尽即止）；默认 ``密钥槽位数``（每槽最多一次）；仅 1 个密钥时为 ``1``。
 
 URL/模型/超时等从环境变量或 ``pipeline.json``（由 ``load_merged_pipeline_config`` 仅从磁盘加载；不与环境默认字典合并）读取。
 """
@@ -104,8 +105,8 @@ def _should_rotate_on_transport_error(exc: BaseException) -> bool:
 
 def _llm_key_rotation_max_attempts(n_keys: int) -> int:
     """
-    环形轮询时的最大 POST 次数（含从最后一槽回到第一槽）。
-    环境变量 ``LLM_KEY_ROTATION_MAX_ATTEMPTS``：正整数；未设置时默认 ``max(n×8, 24)``；``n<=1`` 时为 ``1``。
+    线性轮询的最大 POST 次数：每个密钥槽至多尝试一次，不做环形重试。
+    环境变量 ``LLM_KEY_ROTATION_MAX_ATTEMPTS``：正整数；未设置时默认 ``n_keys``（逐个换，不回头）；``n<=1`` 时为 ``1``。
     """
     if n_keys <= 1:
         return 1
@@ -116,7 +117,7 @@ def _llm_key_rotation_max_attempts(n_keys: int) -> int:
             return max(n_keys, v)
         except ValueError:
             pass
-    return max(n_keys * 8, 24)
+    return n_keys
 
 
 def _extract_message_content(resp: dict[str, Any]) -> str:
@@ -301,7 +302,7 @@ def _timeout_from_env_and_merged(merged: dict[str, Any] | None) -> float:
                     return float(v)
                 except (TypeError, ValueError):
                     continue
-    return 120.0
+    return 20.0
 
 
 def build_llm_env_config(merged: dict[str, Any] | None, system_prompt: str) -> LlmEnvConfig:
@@ -490,8 +491,8 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
     发起 Chat Completions 请求：``messages`` 仅含一条 ``role=user``（``file_flow`` 将环节指令已拼入 ``user_text``）。
 
     若 ``cfg.system_prompt`` 非空（兼容旧代码），会经 ``_compose_single_user_message`` 合并进同一条 ``user``，仍不单独发 ``system``。
-    遇限流、连接超时或无完整 HTTP 响应时，在**多个密钥槽**之间**环形**轮换并重试；单密钥不循环。
-    最大尝试次数见环境变量 ``LLM_KEY_ROTATION_MAX_ATTEMPTS``（默认 ``max(槽位数×8, 24)``）。
+    遇限流、连接超时或无完整 HTTP 响应时，在**多个密钥槽**之间**线性**逐槽切换重试（耗尽即止）；单密钥不循环。
+    最大尝试次数见环境变量 ``LLM_KEY_ROTATION_MAX_ATTEMPTS``（默认 ``密钥槽位数``）。
     """
     if not cfg.api_base or not str(cfg.api_base).strip():
         raise RuntimeError(
@@ -521,7 +522,7 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
     combined = _compose_single_user_message(cfg, user_text)
     if n > 1:
         _LOG.info(
-            "[环节:API请求] POST %s model=%s 超时=%ss 单条user字符数=%s 密钥槽=%s 环形最多尝试=%s 次",
+            "[环节:API请求] POST %s model=%s 超时=%ss 单条user字符数=%s 密钥槽=%s 线性逐槽最多=%s 次",
             url,
             cfg.model,
             cfg.timeout_sec,
@@ -542,7 +543,7 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
         (combined[:120] + "…") if len(combined) > 120 else combined,
     )
 
-    # 当前要 POST 的密钥槽下标（0=主密钥）；失败后变为下一槽，(n-1) 后回到 0。
+    # 当前要 POST 的密钥槽下标（0=主密钥）；失败后顺序移至下一槽，耗尽即止
     key_slot_cursor = 0
     attempt = 0
     while attempt < max_attempts:
@@ -588,7 +589,7 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
             if _should_rotate_llm_api_key(e.code, detail) and n > 1 and attempt < max_attempts:
                 nxt = (key_slot_cursor + 1) % n
                 _LOG.warning(
-                    "[环节:密钥轮换] HTTP %s，%s 后换用密钥槽 %s/%s（第 %s/%s 次 POST，环形）URL=%s 响应片段=%s",
+                    "[环节:密钥轮换] HTTP %s，%s 后换用密钥槽 %s/%s（第 %s/%s 次 POST，线性换槽）URL=%s 响应片段=%s",
                     e.code,
                     f"休眠 {backoff}s" if backoff > 0 else "无休眠",
                     nxt + 1,
@@ -612,11 +613,16 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
         except (urllib.error.URLError, OSError) as e:
             if n <= 1 or attempt >= max_attempts or not _should_rotate_on_transport_error(e):
                 _LOG.error("[环节:API错误] 网络/传输失败 URL=%s err=%s", url, e)
+                if attempt >= max_attempts and n > 1:
+                    raise RuntimeError(
+                        f"大模型请求已达最大尝试次数 {max_attempts}（{n} 个密钥槽线性轮询）仍未成功；"
+                        f"可检查网络/上游或增加可用密钥槽。"
+                    ) from e
                 raise RuntimeError(f"大模型连接失败: {e}") from e
             backoff = _llm_key_rotation_sleep_sec()
             nxt = (key_slot_cursor + 1) % n
             _LOG.warning(
-                "[环节:密钥轮换] 连接/读超时或无完整响应：%s；%s 后换用密钥槽 %s/%s（第 %s/%s 次 POST，环形）",
+                "[环节:密钥轮换] 连接/读超时或无完整响应：%s；%s 后换用密钥槽 %s/%s（第 %s/%s 次 POST，线性换槽）",
                 e,
                 f"休眠 {backoff}s" if backoff > 0 else "无休眠",
                 nxt + 1,
@@ -630,6 +636,6 @@ def call_openai_compatible_chat(cfg: LlmEnvConfig, user_text: str) -> str:
             continue
 
     raise RuntimeError(
-        f"大模型请求已达最大尝试次数 {max_attempts}（{n} 个密钥槽环形轮询）仍未成功；"
-        f"可提高 LLM_KEY_ROTATION_MAX_ATTEMPTS 或检查网络/上游。"
+        f"大模型请求已达最大尝试次数 {max_attempts}（{n} 个密钥槽线性轮询）仍未成功；"
+        f"可检查网络/上游或增加可用密钥槽。"
     )

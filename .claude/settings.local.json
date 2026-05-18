@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_standards_llm_review.py -v)",
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python -m file_flow.prompt_stage_samples)",
+      "Bash(python -m file_flow.aggregate_review_items -s file_flow/out/schema_example.json -d file_flow/out/document_review_items.json -f file_flow/out/field_review_items.json)",
+      "Bash(python -c ' *)",
+      "Bash(python -m pytest tests/test_aggregate_review_items.py -v)",
+      "Bash(python -m pytest tests/test_standards_llm_review.py tests/test_prompt_stage_samples.py -v)",
+      "Bash(python -c \"from file_flow.opendataloader_adapter import client_base_url_for_local_service; print\\(repr\\(client_base_url_for_local_service\\('http://0.0.0.0:5002'\\)\\)\\)\")",
+      "Bash(python -m file_flow.standards_llm_review -i file_flow/out/schema_example.json -s file_flow/out/standards_example.json -f file_flow/out/field_review_items.json -o file_flow/out/test_review.json --dry-run)",
+      "Bash(python -m pytest tests/ -x -q)",
+      "Bash(python -m pytest tests/test_standards_llm_review.py tests/test_schema_llm_extract.py tests/test_llm_openai_key_rotation.py -x -q)",
+      "Bash(python -m pytest tests/test_standards_llm_review.py -x -q)",
+      "Bash(python -m pytest tests/test_standards_llm_review.py tests/test_schema_llm_extract.py tests/test_llm_openai_key_rotation.py tests/test_prompt_stage_samples.py -x -q)",
+      "Bash(python -m file_flow.run_micro_test --dry-run)",
+      "Bash(python -m pytest tests/test_llm_openai_key_rotation.py -x -v)"
+    ]
+  }
+}

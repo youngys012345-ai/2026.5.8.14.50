@@ -19,6 +19,8 @@
   "file_flow_pdf_dir": "pdfs",
   "file_flow_schema_json": "out/schema_example.json",
   "file_flow_standards_json": "out/standards_example.json",
+  "file_flow_document_review_items_json": "out/document_review_items.json",
+  "file_flow_field_review_items_json": "out/field_review_items.json",
   "file_flow_out_dir": "out",
 
   "file_flow_suffix_work": "_work",

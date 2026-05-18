@@ -74,14 +74,13 @@ def _has_standards_review(data: dict[str, Any]) -> bool:
 
 
 def _standards_item_requirement(row: dict[str, Any]) -> str:
-    """清单项「评审要求」正文：优先 ``standard``，否则回退 ``content``。"""
-    s = row.get("standard")
-    if isinstance(s, str) and s.strip():
-        return s.strip()
-    c = row.get("content")
-    if isinstance(c, str) and c.strip():
-        return c.strip()
-    return ""
+    """清单项「评审要求」正文：content + standard 拼接。"""
+    parts: list[str] = []
+    for key in ("content", "standard"):
+        v = row.get(key)
+        if isinstance(v, str) and v.strip():
+            parts.append(v.strip())
+    return "\n".join(parts) if parts else ""
 
 
 def _standards_item_context_line(row: dict[str, Any]) -> str:

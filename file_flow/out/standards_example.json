@@ -1,4 +1,9 @@
-[{
+{
+  "standards_version": "string",
+  "timestamp": "string",
+  "total_items": "number",
+  "items": [
+    {
     "category": "string",
     "subcategory": "string",
     "score": "string",
@@ -16,4 +21,5 @@
     "standard": "",
     "penalty": "string"
   }
-]
+  ]
+}

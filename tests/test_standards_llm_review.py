@@ -22,12 +22,12 @@ def test_build_user_prompt_has_context_and_standard() -> None:
         "penalty": "0",
         "number": True,
     }
-    work_json = '{"document_types": [{"document_name": "D", "fields": [{"field_name": "f", "content": "摘录A"}]}]}'
-    u = build_standards_review_user_prompt(row, work_json, attach_work_json=True)
+    u = build_standards_review_user_prompt(row, focused_context="摘录A")
     assert "程序" in u and "立案" in u and "说明文字" in u
     assert "是否符合时限" in u
     assert "摘录A" in u
-    assert "案卷工作 JSON" in u
+    assert "相关案卷字段内容" in u
+    assert "案卷工作 JSON" not in u
 
 
 def test_run_on_data_dry_run_adds_standards_review() -> None:
@@ -55,14 +55,11 @@ def test_run_on_data_dry_run_adds_standards_review() -> None:
         standards,
         Path("standards.json"),
         cfg,
-        {"file_flow_review_attach_schema_digest": True},
         dry_run=True,
     )
     assert "document_types" in out
     assert "standards_review" in out
     assert out["standards_review"]["items"][0]["review_answer"] == "[dry-run 未调用大模型]"
-    assert out["standards_review"]["work_json_attached"] is True
-    assert out["standards_review"]["digest_attached"] is True
 
 
 def test_render_html_shows_field_description_under_title() -> None:

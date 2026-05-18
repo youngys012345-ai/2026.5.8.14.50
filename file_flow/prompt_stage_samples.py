@@ -19,8 +19,8 @@ def build_sample_prompts() -> dict[str, str]:
 
     from file_flow.schema_llm_extract import build_public_context, build_schema_extract_full_user_prompt
     from file_flow.standards_llm_review import (
+        build_focused_field_context,
         build_standards_review_full_user_prompt,
-        serialize_work_json_for_review,
     )
 
     pub = build_public_context("示例文书", "文书级说明占位")
@@ -46,8 +46,15 @@ def build_sample_prompts() -> dict[str, str]:
         "content": "标准条目说明占位",
         "standard": "须对照判断的 standard 占位条文",
     }
-    work_json = serialize_work_json_for_review(work)
-    stage2 = build_standards_review_full_user_prompt(merged, row, work_json, attach_work_json=True)
+    field_items = {
+        "1.1": {
+            "documents": [
+                {"document_name": "示例文书", "field_names": ["示例字段"]},
+            ],
+        },
+    }
+    ctx = build_focused_field_context(work, field_items, "1.1")
+    stage2 = build_standards_review_full_user_prompt(merged, row, focused_context=ctx)
 
     return {
         "1_schema_extract": stage1,

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""file_flow.urlutil 单元测试。"""
+"""file_flow.opendataloader_adapter 中 client_base_url_for_local_service 单元测试。"""
 
 from __future__ import annotations
 
-from file_flow.urlutil import client_base_url_for_local_service
+from file_flow.opendataloader_adapter import client_base_url_for_local_service
 
 
 def test_client_base_url_empty_unchanged() -> None:
